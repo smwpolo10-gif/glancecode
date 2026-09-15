@@ -56,4 +56,5 @@ export type HubEvent =
   | { type: "session"; session: SessionSummary }
   | { type: "items"; id: string; items: Item[] }
   | { type: "removed"; id: string }
-  | { type: "resync" };
+  | { type: "resync" }
+  | { type: "ping" };

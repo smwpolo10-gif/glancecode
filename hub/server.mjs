@@ -67,6 +67,8 @@ export function startHub({ quiet = false, feed = true } = {}) {
   registry.load();
   const sweepTimer = setInterval(() => registry.sweep().catch(() => {}), 5000);
 
+  let lastPresenceAt = 0;
+
   // ---------- helpers ----------
   const tokenBuf = Buffer.from(cfg.token);
   function authorized(req, url) {
@@ -197,13 +199,15 @@ export function startHub({ quiet = false, feed = true } = {}) {
       const since = Number(req.headers["last-event-id"] || url.searchParams.get("since") || 0);
       res.write(`retry: 2000\n\n`);
       const oldest = events[0]?.id ?? seq + 1;
-      if (since && since + 1 < oldest) {
+      // Gap in the buffer, or the client is ahead of us (the hub restarted): resync.
+      if ((since && since + 1 < oldest) || since > seq) {
         res.write(`data: ${JSON.stringify({ type: "resync" })}\n\n`); // gap: client must refetch
       } else {
         for (const ev of events) if (ev.id > since) res.write(`id: ${ev.id}\ndata: ${ev.data}\n\n`);
       }
       clients.add(res);
-      const ping = setInterval(() => res.write(`: ping\n\n`), 15_000);
+      // A data event, not an SSE comment, so the app can tell a live stream from a dead one.
+      const ping = setInterval(() => res.write(`data: {"type":"ping"}\n\n`), 15_000);
       req.on("close", () => {
         clearInterval(ping);
         clients.delete(res);
@@ -232,6 +236,11 @@ export function startHub({ quiet = false, feed = true } = {}) {
     }
 
     if (method === "POST" && path === "/api/presence") {
+      const now = Date.now();
+      if (lastPresenceAt && now - lastPresenceAt > 75_000 && now - lastPresenceAt < 30 * 60_000) {
+        log(`app: no heartbeat for ${Math.round((now - lastPresenceAt) / 1000)}s (the app was suspended or offline)`);
+      }
+      lastPresenceAt = now;
       notifier.markForeground();
       return send(res, 200, { ok: true });
     }

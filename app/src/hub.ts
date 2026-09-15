@@ -1,5 +1,6 @@
 // Client for the glancecode hub: REST calls plus a replaying event stream.
 import type { HubEvent, Item, RecentProject, RecentSession, SessionSummary } from "./types.ts";
+import { every } from "./timers.ts";
 
 export interface HubConfig {
   url: string; // e.g. https://my-mac.tailnet-name.ts.net:7443
@@ -16,9 +17,28 @@ export class Hub {
   private es: EventSource | null = null;
   private lastEventId = 0;
   private listeners = new Set<Listener>();
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private connecting = false;
+  private nextRetryAt = 0;
+  private lastSignalAt = 0;
 
-  constructor(public cfg: HubConfig) {}
+  constructor(public cfg: HubConfig) {
+    // Retries and stall checks run on a native-backed interval (see timers.ts).
+    every(() => this.watch(), 2000);
+  }
+
+  /** Reconnect when the stream is down, or when it has been silent too long. */
+  private watch() {
+    if (this.cfg.url === "demo") return;
+    const now = Date.now();
+    if (!this.connected && !this.connecting && this.nextRetryAt && now >= this.nextRetryAt) {
+      this.nextRetryAt = 0;
+      void this.connect();
+    } else if (this.connected && this.es && this.lastSignalAt && now - this.lastSignalAt > 45_000) {
+      // The hub sends a ping every 15 s; nothing for 45 s means the stream is dead
+      // even though the WebView never reported an error.
+      this.refresh();
+    }
+  }
 
   subscribe(fn: Listener) {
     this.listeners.add(fn);
@@ -45,19 +65,27 @@ export class Hub {
   }
 
   async connect() {
+    if (this.connecting) return;
+    this.connecting = true;
     try {
       const state = await this.req<{ seq: number; sessions: SessionSummary[] }>("GET", "/api/state");
       this.sessions = new Map(state.sessions.map((s) => [s.id, s]));
-      // Drop cached transcripts; they refetch when opened.
-      this.items.clear();
       this.lastEventId = state.seq;
       this.openStream();
       this.connected = true;
       this.lastError = "";
+      // Keep cached transcripts on screen, but refetch them: events may have been
+      // missed while the stream was down. Forget sessions that no longer exist.
+      for (const id of [...this.items.keys()]) {
+        if (!this.sessions.has(id)) this.items.delete(id);
+        else void this.loadItems(id).catch(() => {});
+      }
     } catch (err) {
       this.connected = false;
       this.lastError = err instanceof Error ? err.message : String(err);
       this.scheduleRetry();
+    } finally {
+      this.connecting = false;
     }
     this.notify();
   }
@@ -67,7 +95,9 @@ export class Hub {
     const url = `${this.cfg.url.replace(/\/$/, "")}/api/events?token=${encodeURIComponent(this.cfg.token)}&since=${this.lastEventId}`;
     const es = new EventSource(url);
     this.es = es;
+    this.lastSignalAt = Date.now();
     es.onmessage = (msg) => {
+      this.lastSignalAt = Date.now();
       if (msg.lastEventId) this.lastEventId = Number(msg.lastEventId);
       let ev: HubEvent;
       try {
@@ -78,28 +108,46 @@ export class Hub {
       this.apply(ev);
     };
     es.onerror = () => {
-      // EventSource retries by itself, but a stale `since` would replay from the
-      // wrong place after a hub restart, so reconnect from a fresh snapshot.
-      if (es.readyState === EventSource.CLOSED || !this.connected) return;
-      this.connected = false;
-      this.notify();
-      es.close();
-      this.scheduleRetry();
-    };
-    es.onopen = () => {
-      if (!this.connected) {
-        this.connected = true;
+      if (this.es !== es) return;
+      // Leave the EventSource open: its built-in retry reconnects without app timers,
+      // which the Even WebView can stall while the app is idle.
+      if (this.connected) {
+        this.connected = false;
+        this.disconnectedAt = Date.now();
         this.notify();
       }
+      if (es.readyState === EventSource.CLOSED) this.scheduleRetry();
+    };
+    es.onopen = () => {
+      if (this.es !== es) return;
+      this.lastSignalAt = Date.now();
+      if (!this.connected) void this.resync();
     };
   }
 
+  /** After the stream comes back: refresh sessions and cached transcripts, keep the stream. */
+  private async resync() {
+    try {
+      const state = await this.req<{ seq: number; sessions: SessionSummary[] }>("GET", "/api/state");
+      this.sessions = new Map(state.sessions.map((s) => [s.id, s]));
+      for (const id of [...this.items.keys()]) {
+        if (!this.sessions.has(id)) this.items.delete(id);
+        else void this.loadItems(id).catch(() => {});
+      }
+      this.connected = true;
+      this.lastError = "";
+      if (this.disconnectedAt) void this.log(`stream back after ${Math.round((Date.now() - this.disconnectedAt) / 1000)}s, resynced`);
+      this.disconnectedAt = 0;
+    } catch (err) {
+      this.lastError = err instanceof Error ? err.message : String(err);
+    }
+    this.notify();
+  }
+
+  private disconnectedAt = 0;
+
   private scheduleRetry() {
-    if (this.retryTimer) return;
-    this.retryTimer = setTimeout(() => {
-      this.retryTimer = null;
-      void this.connect();
-    }, 3000);
+    if (!this.nextRetryAt) this.nextRetryAt = Date.now() + 3000;
   }
 
   /** Call when the app returns to the foreground: suspended WebViews drop streams. */
@@ -110,6 +158,7 @@ export class Hub {
   }
 
   private apply(ev: HubEvent) {
+    if (ev.type === "ping") return;
     if (ev.type === "session") {
       this.sessions.set(ev.session.id, ev.session);
     } else if (ev.type === "removed") {
@@ -134,6 +183,17 @@ export class Hub {
     this.sessions.set(id, data.session);
     this.items.set(id, data.items);
     this.notify();
+  }
+
+  private loadingItems = new Set<string>();
+
+  /** Fetch a transcript if it isn't cached and no fetch is already running. */
+  ensureItems(id: string) {
+    if (this.items.has(id) || this.loadingItems.has(id) || !this.connected) return;
+    this.loadingItems.add(id);
+    this.loadItems(id)
+      .catch(() => {})
+      .finally(() => this.loadingItems.delete(id));
   }
 
   list(): SessionSummary[] {

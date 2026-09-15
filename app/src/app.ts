@@ -1,5 +1,6 @@
 // Screens and controller for the glasses UI.
-import { AudioInputSource, type EvenAppBridge } from "@evenrealities/even_hub_sdk";
+import { AudioInputSource, ImuReportPace, type EvenAppBridge } from "@evenrealities/even_hub_sdk";
+import { every, later, type Cancel } from "./timers.ts";
 import { BODY_INNER_W, BODY_LINES, HEADER_INNER_W, Display, type Frame, type MenuItem } from "./display.ts";
 import { GLYPH, ago, itemsToLines, shortModel, stateLabel } from "./format.ts";
 import type { Hub } from "./hub.ts";
@@ -25,7 +26,7 @@ type VoiceState =
   | { phase: "idle" }
   | { phase: "recording"; started: number; target: (text: string) => Promise<void>; partial: string }
   | { phase: "transcribing"; target: (text: string) => Promise<void>; partial: string }
-  | { phase: "confirm"; text: string; timer: ReturnType<typeof setTimeout>; send: () => Promise<void> };
+  | { phase: "confirm"; text: string; timer: Cancel; send: () => Promise<void> };
 
 /** How long a transcript waits after release before sending by itself. Tap sends sooner. */
 const AUTO_SEND_MS = 3000;
@@ -35,19 +36,20 @@ const PARTIAL_EVERY_MS = 1000;
 export class App {
   private stack: Screen[] = [];
   private toastText = "";
-  private toastTimer: ReturnType<typeof setTimeout> | null = null;
-  private renderTimer: ReturnType<typeof setTimeout> | null = null;
+  private toastTimer: Cancel | null = null;
+  private renderTimer: Cancel | null = null;
   private voice: VoiceState = { phase: "idle" };
   private chunks: Uint8Array[] = [];
-  private partialTimer: ReturnType<typeof setInterval> | null = null;
+  private partialTimer: Cancel | null = null;
   private partialInFlight: Promise<void> | null = null;
   private holdStartedAt = 0;
-  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private backgroundAt = 0;
+  private tickTimer: Cancel | null = null;
 
   constructor(public bridge: EvenAppBridge, public display: Display, public hub: Hub) {
     hub.subscribe(() => this.render());
     this.push(new HomeScreen(this));
-    this.tickTimer = setInterval(() => {
+    this.tickTimer = every(() => {
       if (this.voice.phase === "recording") this.render();
     }, 500);
   }
@@ -76,8 +78,8 @@ export class App {
 
   toast(text: string, ms = 2500) {
     this.toastText = text;
-    if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => {
+    this.toastTimer?.cancel();
+    this.toastTimer = later(() => {
       this.toastText = "";
       this.render();
     }, ms);
@@ -86,13 +88,21 @@ export class App {
 
   render(now = false) {
     if (now) {
-      if (this.renderTimer) clearTimeout(this.renderTimer);
+      this.renderTimer?.cancel();
+      this.renderTimer = null;
+      this.draw();
+      return;
+    }
+    // Draw right away unless we just drew; events arrive on network callbacks, which
+    // run even when the WebView has stalled timers. The timer only coalesces bursts.
+    if (Date.now() - this.lastDrawAt >= 150) {
+      this.renderTimer?.cancel();
       this.renderTimer = null;
       this.draw();
       return;
     }
     if (this.renderTimer) return;
-    this.renderTimer = setTimeout(() => {
+    this.renderTimer = later(() => {
       this.renderTimer = null;
       this.draw();
     }, 150);
@@ -101,7 +111,37 @@ export class App {
   /** Transcript frame captured when a hold starts; the body stays still while you talk. */
   private frozenFrame: Frame | null = null;
 
+  private lastDrawAt = 0;
+  private imuOn = false;
+
+  /**
+   * The Even app's WebView can freeze while nothing arrives from the glasses: no
+   * timers, no stream callbacks, so a session you're only watching stops updating
+   * until you tap. Events from the glasses wake it, so while a working or waiting
+   * session is on screen, ask for a slow IMU stream (one report a second).
+   */
+  private keepAwake(want: boolean) {
+    if (want === this.imuOn || (want && this.imuUnsupported)) return;
+    this.imuOn = want;
+    this.bridge
+      .imuControl(want, ImuReportPace.P1000)
+      .then((ok) => {
+        if (want && !ok) {
+          this.imuOn = false;
+          this.imuUnsupported = true;
+        }
+      })
+      .catch(() => {
+        this.imuOn = false;
+        if (want) this.imuUnsupported = true;
+      });
+  }
+  private imuUnsupported = false;
+
   private draw() {
+    this.lastDrawAt = Date.now();
+    const top = this.top;
+    this.keepAwake(top instanceof SessionScreen && top.isActive() && this.voice.phase === "idle");
     let frame: Frame;
     if (!this.hub.connected && this.hub.sessions.size === 0) {
       frame = {
@@ -145,11 +185,19 @@ export class App {
       return;
     }
     if (a.type === "foreground") {
-      this.hub.refresh();
+      // Opening the glasses menu briefly backgrounds the app. Only reconnect after a
+      // real absence or when the stream is down; a reconnect is not free.
+      const away = this.backgroundAt ? Date.now() - this.backgroundAt : Infinity;
+      this.backgroundAt = 0;
+      if (away > 60_000 && away !== Infinity) void this.hub.log(`app back in foreground after ${Math.round(away / 1000)}s`);
+      if (!this.hub.connected || away > 8000) this.hub.refresh();
       void this.hub.presence();
+      this.render(true);
       return;
     }
     if (a.type === "background" || a.type === "exit") {
+      this.backgroundAt = Date.now();
+      if (a.type === "exit") this.keepAwake(false);
       if (this.voice.phase === "recording") {
         void this.hub.log(`recording discarded: app went to ${a.type} after ${Date.now() - this.holdStartedAt}ms`);
         this.toast("Recording stopped: the glasses left the app", 4000);
@@ -189,7 +237,7 @@ export class App {
       this.toast("! Microphone unavailable");
       return;
     }
-    this.partialTimer = setInterval(() => this.updatePartial(), PARTIAL_EVERY_MS);
+    this.partialTimer = every(() => this.updatePartial(), PARTIAL_EVERY_MS);
   }
 
   private joinChunks(): Uint8Array {
@@ -224,7 +272,7 @@ export class App {
   }
 
   private stopPartials() {
-    if (this.partialTimer) clearInterval(this.partialTimer);
+    this.partialTimer?.cancel();
     this.partialTimer = null;
   }
 
@@ -270,7 +318,7 @@ export class App {
     const sendNow = async () => {
       if (sent) return;
       sent = true;
-      clearTimeout(timer);
+      timer.cancel();
       this.voice = { phase: "idle" };
       this.render(true);
       try {
@@ -280,7 +328,7 @@ export class App {
       }
       this.render();
     };
-    const timer = setTimeout(sendNow, AUTO_SEND_MS);
+    const timer = later(() => void sendNow(), AUTO_SEND_MS);
     this.voice = { phase: "confirm", text, timer, send: sendNow };
     this.render(true);
   }
@@ -291,7 +339,7 @@ export class App {
       this.stopPartials();
       await this.bridge.audioControl(false).catch(() => {});
     }
-    if (v.phase === "confirm") clearTimeout(v.timer);
+    if (v.phase === "confirm") v.timer.cancel();
     this.voice = { phase: "idle" };
     this.toast("Cancelled", 1500);
   }
@@ -449,6 +497,12 @@ class SessionScreen implements Screen {
     return this.app.hub.sessions.get(this.id);
   }
 
+  /** Working or waiting: worth keeping the WebView awake for. */
+  isActive() {
+    const s = this.session;
+    return !!s && (s.state === "working" || s.state === "waiting" || s.state === "starting");
+  }
+
   whyNoVoice() {
     const s = this.session;
     if (!s || s.state === "ended") return "This session has ended";
@@ -508,6 +562,7 @@ class SessionScreen implements Screen {
     const s = this.session;
     if (!s) return { header: "Session closed", body: wrap("This session is no longer running. Double-tap to go back.", BODY_INNER_W), menu: MENU_SESSION };
     const items = this.app.hub.items.get(this.id);
+    if (!items) this.app.hub.ensureItems(this.id); // self-heal if the cache was dropped
     const transcript = items ? itemsToLines(items, BODY_INNER_W) : ["Loading…"];
     const following = this.scroll === 0;
     const waitBlock = following ? this.waitingLines(s) : [];

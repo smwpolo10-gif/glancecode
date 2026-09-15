@@ -1,3 +1,5 @@
+// Must stay the first import: it captures the browser timers before the SDK replaces them.
+import { every, timersPatched } from "./timers.ts";
 import { waitForEvenAppBridge, type EvenAppBridge } from "@evenrealities/even_hub_sdk";
 import { App } from "./app.ts";
 import { DemoHub } from "./demo.ts";
@@ -91,7 +93,8 @@ async function main() {
     });
     await hub.connect();
     void hub.presence();
-    setInterval(() => void hub.presence(), 30_000);
+    every(() => void hub.presence(), 30_000);
+    if (timersPatched()) void hub.log("timers: SDK shadow timers active, using native timers alongside");
   };
 
   // Until a hub is chosen, a tap on the glasses starts the demo.

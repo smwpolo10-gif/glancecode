@@ -2,6 +2,7 @@
 // is not paired yet, so anyone (including Even Hub reviewers) can try every
 // screen without a machine running the hub.
 import { Hub } from "./hub.ts";
+import { every, later, type Cancel } from "./timers.ts";
 import type { Item, RecentProject, RecentSession, SessionSummary } from "./types.ts";
 
 const now = () => Date.now();
@@ -47,7 +48,7 @@ const WORK_LOOP: Array<Item | { state: SessionSummary["state"]; activity?: strin
 
 export class DemoHub extends Hub {
   private step = 0;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: Cancel | null = null;
   private partialCalls = 0;
 
   constructor() {
@@ -58,7 +59,7 @@ export class DemoHub extends Hub {
     this.seed();
     this.connected = true;
     this.notify();
-    if (!this.timer) this.timer = setInterval(() => this.tick(), 3500);
+    if (!this.timer) this.timer = every(() => this.tick(), 3500);
   }
 
   override refresh() {
@@ -131,7 +132,7 @@ export class DemoHub extends Hub {
     s.state = "working";
     s.activity = "Thinking";
     this.notify();
-    setTimeout(() => {
+    later(() => {
       this.add(id, item("assistant", "This is the demo, so nothing ran. Pair the app with your own machine to talk to real Claude Code sessions."));
       s.state = "idle";
       s.activity = "";
@@ -162,7 +163,7 @@ export class DemoHub extends Hub {
       s.state = "idle";
     } else {
       s.state = "working";
-      setTimeout(() => {
+      later(() => {
         this.add(id, item("assistant", "Deployed to staging. Open staging.example.com on your phone to check the new onboarding."));
         s.state = "idle";
         s.lastActivity = now();
@@ -217,7 +218,7 @@ export class DemoHub extends Hub {
   /** Voice in the demo: pretend the words arrive a few at a time while holding. */
   override async transcribe(_pcm: Uint8Array, partial = false): Promise<string> {
     const full = "Run the signup tests again and tell me what fails";
-    await new Promise((r) => setTimeout(r, partial ? 150 : 600));
+    await new Promise<void>((r) => later(r, partial ? 150 : 600));
     if (!partial) {
       this.partialCalls = 0;
       return full;
