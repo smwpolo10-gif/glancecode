@@ -39,6 +39,11 @@ export class Display {
 
   constructor(private bridge: EvenAppBridge) {}
 
+  /** Forget what we think is on the glasses, so the next frame is sent in full. */
+  invalidate() {
+    this.shown = { header: "", body: "", menuKey: this.shown.menuKey };
+  }
+
   show(frame: Frame) {
     const body = frame.body.slice(0, BODY_LINES);
     this.pending = { ...frame, body };

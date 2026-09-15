@@ -192,6 +192,9 @@ export class App {
       if (away > 60_000 && away !== Infinity) void this.hub.log(`app back in foreground after ${Math.round(away / 1000)}s`);
       if (!this.hub.connected || away > 8000) this.hub.refresh();
       void this.hub.presence();
+      // The glasses may have cleared the screen while the display was off or the
+      // app was away, so resend the whole frame rather than only what changed.
+      this.display.invalidate();
       this.render(true);
       return;
     }
