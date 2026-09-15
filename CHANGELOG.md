@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (glasses app 0.2.4)
 
 - Terminal tabs show Claude Code's session title for sessions inside tmux.
 - Voice: a transcript waits for a tap to send; it no longer sends by itself.
