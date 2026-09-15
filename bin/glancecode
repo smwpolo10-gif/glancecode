@@ -306,42 +306,6 @@ const commands = {
     ok("speech model downloaded");
   },
 
-  // ---------- optional Plausible calendar feed ----------
-  async stats() {
-    const cfg = loadConfig();
-    const sub = rest[0];
-    const { PLAUSIBLE_KEY_FILE } = await import(join(ROOT, "hub", "stats.mjs"));
-    if (sub === "key") {
-      const key = await readHidden("Plausible Stats API key (input hidden): ");
-      if (!key) return console.log("No key entered; nothing changed.");
-      writeFileSync(PLAUSIBLE_KEY_FILE, key + "\n", { mode: 0o600 });
-      console.log(`Saved to ${PLAUSIBLE_KEY_FILE}. Restart the hub: ${CLI} service restart`);
-      return;
-    }
-    if (!cfg.statsProducts?.length) {
-      console.log(`No stats configured. Add "statsProducts" to ${join(CONFIG_DIR, "config.json")} (see docs/site-stats.md).`);
-      return;
-    }
-    if (sub === "url") {
-      const base = hubUrl(cfg);
-      if (!base) return warn(`No reachable address for the phone. Run: ${CLI} serve`);
-      console.log("On the iPhone: Settings > Apps > Calendar > Calendar Accounts > Add Account > Other > Add Subscribed Calendar, and paste:\n");
-      console.log(`${base.replace(/^http/, "webcal").replace(/^webcals/, "webcal")}/api/stats.ics?key=${cfg.statsToken}`);
-      console.log("\nThen make sure the Even app's Calendar widget includes it.");
-      return;
-    }
-    try {
-      const res = await fetch(`http://127.0.0.1:${cfg.port}/api/stats?refresh=1`, { headers: { Authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(60_000) });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error || res.status);
-      for (const line of body.lines) console.log(line);
-      if (body.updated) console.log(body.updated);
-      for (const p of body.state?.products || []) for (const e of p.errors) console.log(`  ! ${p.label} (${p.site}) ${e}`);
-    } catch (err) {
-      console.log(`hub: ${err.message} (is it running? ${CLI} service status)`);
-    }
-  },
-
   version() {
     console.log(`${CLI} ${PKG.version}`);
   },
@@ -366,8 +330,7 @@ Pieces
   ${CLI} service [install|uninstall|restart|status]
   ${CLI} serve [on|off|status]   HTTPS on your *.ts.net name through tailscale serve
   ${CLI} hub                run the hub in the foreground
-  ${CLI} setup-voice        download the local speech model
-  ${CLI} stats [key|url]    optional Plausible stats as a calendar feed`);
+  ${CLI} setup-voice        download the local speech model`);
   },
 };
 
@@ -557,40 +520,6 @@ function staleHookCommands(settings) {
     for (const g of groups) for (const h of g.hooks || []) if (isOurHook(h.command) && !existsSync(h.command)) out.push(h.command);
   }
   return out;
-}
-
-function readHidden(prompt) {
-  return new Promise((resolve) => {
-    const stdin = process.stdin;
-    process.stdout.write(prompt);
-    if (!stdin.isTTY) {
-      let data = "";
-      stdin.on("data", (c) => (data += c));
-      stdin.on("end", () => resolve(data.trim()));
-      return;
-    }
-    let value = "";
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding("utf8");
-    const onData = (ch) => {
-      if (ch === "\r" || ch === "\n" || ch === "") {
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.off("data", onData);
-        process.stdout.write("\n");
-        resolve(value.trim());
-      } else if (ch === "") {
-        process.stdout.write("\n");
-        process.exit(130);
-      } else if (ch === "") {
-        value = value.slice(0, -1);
-      } else {
-        value += ch;
-      }
-    };
-    stdin.on("data", onData);
-  });
 }
 
 function readSettings() {

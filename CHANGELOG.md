@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Removed the Plausible stats calendar feed (`glancecode stats`, `statsProducts`,
+  `/api/stats.ics`). It had nothing to do with Claude Code sessions.
+
 ## 0.3.0 (glasses app 0.2.4)
 
 - Terminal tabs show Claude Code's session title for sessions inside tmux.

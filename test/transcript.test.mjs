@@ -156,24 +156,3 @@ test("delivery check matches a prompt across wrapped terminal lines", async () =
   assert.ok(screenHasSnippet("  ❯ I am not sure if it is worth mentio\n    ning, but if I", snip));
   assert.ok(!screenHasSnippet("⏺ something else entirely", snip));
 });
-
-test("stats calendar feed: one escaped, folded event per product", async () => {
-  const { Stats, foldLine } = await import("../hub/stats.mjs");
-  const s = new Stats({ products: [] });
-  s.state = {
-    date: "2026-09-15",
-    updatedAt: Date.parse("2026-09-15T20:30:00Z"),
-    products: [
-      { label: "Shop", site: "example.com", visitors: 120, appStore: 4, playStore: 2, errors: [] },
-      { label: "Game", site: "example.com", visitors: 30, appStore: null, playStore: 1, errors: ["appStore: goal missing"] },
-    ],
-  };
-  const ics = s.ics(new Date("2026-09-15T20:31:00Z"));
-  assert.match(ics, /SUMMARY:Shop 120 visits · 4 App Store · 2 Play\r\n/);
-  assert.match(ics, /SUMMARY:Game 30 visits · \? App Store · 1 Play\r\n/);
-  assert.equal((ics.match(/BEGIN:VEVENT/g) || []).length, 2);
-  assert.match(ics, /DTSTART;VALUE=DATE:\d{8}\r\nDTEND;VALUE=DATE:\d{8}\r\n/);
-  assert.match(ics, /UID:site-stats-game-\d{4}-\d{2}-\d{2}@glancecode/);
-  for (const line of ics.split("\r\n")) assert.ok(Buffer.byteLength(line) <= 75, `line too long: ${line}`);
-  assert.equal(foldLine("x".repeat(80)).split("\r\n ").join(""), "x".repeat(80));
-});

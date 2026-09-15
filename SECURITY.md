@@ -20,8 +20,6 @@ Don't open a public issue for a security problem.
   is never bundled into the glasses app.
 - The Claude Code hook posts to a separate port on 127.0.0.1 that is never served
   over Tailscale.
-- The optional stats calendar feed uses its own read-only token that can't reach
-  any other endpoint.
 - Keys are only sent to a session after the matching dialog is read back from the
   terminal, and prompts are refused while a permission dialog is open.
 

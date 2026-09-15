@@ -11,7 +11,6 @@ import { Transcriber } from "./stt.mjs";
 import { Notifier } from "./notify.mjs";
 import * as tmuxCtl from "./tmux.mjs";
 import { color, printFeed } from "./feed.mjs";
-import { Stats } from "./stats.mjs";
 import { BRAND } from "./brand.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -60,9 +59,6 @@ export function startHub({ quiet = false, feed = true } = {}) {
   registry.on("finished", (s, last) => {
     notifier.send(`${s.id}:done`, `${s.project} finished`, last.replace(/\s+/g, " ") || "Turn complete");
   });
-
-  const stats = new Stats({ products: cfg.statsProducts || [], log });
-  if (stats.products.length) stats.start();
 
   registry.load();
   tmuxCtl.reloadTmuxConf().catch(() => {}); // settings added in newer versions reach a running tmux server
@@ -183,16 +179,6 @@ export function startHub({ quiet = false, feed = true } = {}) {
     const method = req.method;
 
     if (path === "/api/health") return send(res, 200, { ok: true });
-
-    // Calendar feed for the glasses dashboard; its own read-only token.
-    if (method === "GET" && path === "/api/stats.ics") {
-      const key = Buffer.from(url.searchParams.get("key") || "");
-      const want = Buffer.from(cfg.statsToken);
-      if (key.length !== want.length || !timingSafeEqual(key, want)) throw new HttpError(401, "bad key");
-      if (!stats.state || Date.now() - stats.state.updatedAt > 5 * 60_000) await stats.refresh().catch(() => {});
-      res.writeHead(200, { "Content-Type": "text/calendar; charset=utf-8", "Cache-Control": "no-store" });
-      return res.end(stats.ics());
-    }
     if (!authorized(req, url)) throw new HttpError(401, "bad token");
 
     if (method === "GET" && path === "/api/events") {
@@ -214,11 +200,6 @@ export function startHub({ quiet = false, feed = true } = {}) {
         clients.delete(res);
       });
       return;
-    }
-
-    if (method === "GET" && path === "/api/stats") {
-      if (url.searchParams.get("refresh") === "1" || !stats.state) await stats.refresh();
-      return send(res, 200, { lines: stats.lines(), updated: stats.updatedLabel(), state: stats.state });
     }
 
     if (method === "GET" && path === "/api/state") {
@@ -399,7 +380,6 @@ export function startHub({ quiet = false, feed = true } = {}) {
     registry,
     close() {
       clearInterval(sweepTimer);
-      stats.stop();
       for (const res of clients) res.end();
       hookServer.close();
       for (const s of apiServers) s.close();

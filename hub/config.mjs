@@ -34,8 +34,6 @@ const DEFAULTS = {
   ntfyServer: "https://ntfy.sh",
   // Extra arguments for sessions the glasses start (for example ["--model", "sonnet"]).
   claudeArgs: [],
-  // Optional Plausible stats published as a calendar feed. Empty means off.
-  statsProducts: [],
 };
 
 /** Read the raw config file without generating tokens (used at import time). */
@@ -63,12 +61,6 @@ export function loadConfig() {
   let changed = false;
   if (!cfg.token) {
     cfg.token = randomBytes(24).toString("base64url");
-    changed = true;
-  }
-  // Read-only token for the stats calendar feed: subscribed calendar URLs are stored
-  // by Apple, so they must not carry the token that can type into sessions.
-  if (!cfg.statsToken) {
-    cfg.statsToken = randomBytes(18).toString("base64url");
     changed = true;
   }
   const merged = { ...DEFAULTS, ...cfg };
