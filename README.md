@@ -46,15 +46,33 @@ the glasses all see the same conversation.
 
 ## Requirements
 
-- macOS or Linux, Node 20 or newer
+On your computer (macOS or Linux):
+
+- Node 20 or newer
 - [Claude Code](https://claude.com/claude-code), signed in
 - tmux
-- [Tailscale](https://tailscale.com) on the computer and the phone, with HTTPS
-  certificates turned on for your tailnet
-- Optional, for voice: whisper.cpp (`whisper-server`)
-- Even Realities G2 glasses and the Even Realities app
+- [Tailscale](https://tailscale.com), signed in, with HTTPS certificates turned on
+  for your tailnet at [login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)
+- Optional, for voice: [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
+  It's free, open source and runs offline, so there's no API key or
+  subscription. Without it, everything except hold to talk still works.
 
-On macOS: `brew install tmux whisper-cpp`
+On macOS with Homebrew:
+
+```bash
+brew install tmux whisper-cpp
+brew install --cask tailscale-app
+```
+
+On your phone:
+
+- The Even Realities app, paired with your G2 glasses
+- Tailscale for [iPhone](https://apps.apple.com/app/tailscale/id1470499037) or
+  [Android](https://play.google.com/store/apps/details?id=com.tailscale.ipn),
+  signed in to the same Tailscale account as your computer
+
+GlanceCode is tested on iPhone. Android should work the same way but hasn't been
+tested yet.
 
 ## Install
 
