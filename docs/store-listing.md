@@ -21,7 +21,7 @@ work with them from your G2.
 
 GlanceCode needs the free glancecode hub running on your Mac or Linux computer, and
 Tailscale on the computer and the phone. Setup takes two commands:
-`npm install -g glancecode` then `glancecode setup`. Everything stays on your own
+`npm install -g @sousy/glancecode` then `glancecode setup`. Everything stays on your own
 computer and network, and voice is transcribed locally.
 
 Not paired yet? Tap on the glasses to try a demo with sample sessions.

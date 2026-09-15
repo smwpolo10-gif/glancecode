@@ -32,7 +32,7 @@ project name and a short status line to the ntfy server you configure.
 ## Removing your data
 
 Choose "Forget this hub" in the app, uninstall the app, and remove the hub with
-`glancecode service uninstall`, `glancecode uninstall` and `npm uninstall -g glancecode`.
+`glancecode service uninstall`, `glancecode uninstall` and `npm uninstall -g @sousy/glancecode`.
 Configuration lives in `~/.config/glancecode` and the speech model in
 `~/.local/share/glancecode`; delete both folders to remove everything.
 

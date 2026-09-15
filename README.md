@@ -77,7 +77,7 @@ tested yet.
 ## Install
 
 ```bash
-npm install -g glancecode
+npm install -g @sousy/glancecode
 glancecode setup
 ```
 
