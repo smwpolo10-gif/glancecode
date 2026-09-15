@@ -50,7 +50,7 @@ const dir = mkdtempSync(join(tmpdir(), "glancecode-pack-"));
 const manifestPath = join(dir, "app.json");
 writeFileSync(manifestPath, JSON.stringify(packManifest, null, 2) + "\n");
 try {
-  run("npx", ["evenhub", "pack", manifestPath, "dist", "-o", out, "--sdk-ver", "0.0.15"]);
+  run("npx", ["--no-install", "evenhub", "pack", manifestPath, "dist", "-o", out, "--sdk-ver", "0.0.15"]);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
