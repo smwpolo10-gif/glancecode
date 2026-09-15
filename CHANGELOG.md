@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Removed the Plausible stats calendar feed (`glancecode stats`, `statsProducts`,
   `/api/stats.ics`). It had nothing to do with Claude Code sessions.
