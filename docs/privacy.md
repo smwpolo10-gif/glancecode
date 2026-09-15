@@ -38,4 +38,4 @@ Configuration lives in `~/.config/glancecode` and the speech model in
 
 ## Contact
 
-Open an issue at https://github.com/OWNER/glancecode/issues.
+Open an issue at https://github.com/sousyllc/glancecode/issues.

@@ -5,7 +5,7 @@ Issues and pull requests are welcome.
 ## Setup
 
 ```bash
-git clone https://github.com/OWNER/glancecode.git
+git clone https://github.com/sousyllc/glancecode.git
 cd glancecode
 npm run build:app
 npm test

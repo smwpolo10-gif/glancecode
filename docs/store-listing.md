@@ -40,6 +40,6 @@ list, a working session, an approval (tap to approve), hold to talk, and the men
 
 **Screenshots:** `docs/screenshots/01-home.png` to `05-menu.png` (576×288).
 
-**Privacy policy URL:** https://github.com/OWNER/glancecode/blob/main/docs/privacy.md
+**Privacy policy URL:** https://github.com/sousyllc/glancecode/blob/main/docs/privacy.md
 
 **Icon:** draw in the portal's 24×24 editor. Keep it to 2×2 pixel blocks.

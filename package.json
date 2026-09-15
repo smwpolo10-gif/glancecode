@@ -42,8 +42,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/glancecode.git"
+    "url": "git+https://github.com/sousyllc/glancecode.git"
   },
-  "homepage": "https://github.com/OWNER/glancecode#readme",
-  "bugs": "https://github.com/OWNER/glancecode/issues"
+  "homepage": "https://github.com/sousyllc/glancecode#readme",
+  "bugs": "https://github.com/sousyllc/glancecode/issues"
 }
