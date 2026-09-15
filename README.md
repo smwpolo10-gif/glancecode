@@ -39,7 +39,7 @@ the glasses all see the same conversation.
   calls, pixel-wrapped for the G2 display.
 - Approvals and questions with the exact options Claude Code is showing. Keys are
   only pressed after that dialog is read back from the terminal.
-- Hold to talk. Words appear while you speak, and a tap sends them.
+- Hold to talk. Words appear while you speak. Release to review, then tap to send.
 - Start a new session in a recent project, or resume a past session.
 - A menu to interrupt, compact, or switch the session's model without changing
   your default.
@@ -104,7 +104,7 @@ Sessions started any other way still appear on the glasses, marked view only.
 |---|---|---|
 | Swipe | move | scroll, or move between options |
 | Tap | open | choose the highlighted option, or jump to the latest |
-| Hold | talk to the highlighted session | talk, or answer an open question |
+| Hold | talk to the highlighted session | talk, or answer an open question; hold again to redo |
 | Double-tap | exit | back |
 | Tap then hold | menu | interrupt, jump to latest, switch model, compact |
 

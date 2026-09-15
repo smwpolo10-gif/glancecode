@@ -26,10 +26,10 @@ type VoiceState =
   | { phase: "idle" }
   | { phase: "recording"; started: number; target: (text: string) => Promise<void>; partial: string }
   | { phase: "transcribing"; target: (text: string) => Promise<void>; partial: string }
-  | { phase: "confirm"; text: string; timer: Cancel; send: () => Promise<void> };
+  | { phase: "confirm"; text: string; target: (text: string) => Promise<void>; send: () => Promise<void> };
 
-/** How long a transcript waits after release before sending by itself. Tap sends sooner. */
-const AUTO_SEND_MS = 3000;
+// After release the transcript waits for a tap (send) or double-tap (cancel). Nothing
+// sends by itself: you get to read it first, and a timer could stall anyway.
 /** How often the audio so far is re-transcribed for the live preview while holding. */
 const PARTIAL_EVERY_MS = 1000;
 
@@ -171,7 +171,7 @@ export class App {
     } else if (v.phase === "transcribing") {
       tail = ["", "… Finishing", ...preview(v.partial)];
     } else {
-      tail = ["", ...preview(v.text), "tap to send now · double-tap to cancel"];
+      tail = ["", ...preview(v.text), "tap to send · hold to redo · double-tap to cancel"];
     }
     const keep = Math.max(0, BODY_LINES - tail.length);
     return { ...frame, body: [...frame.body.slice(-keep), ...tail].slice(-BODY_LINES) };
@@ -206,7 +206,11 @@ export class App {
       return;
     }
     // Voice gestures take priority over screen gestures.
-    if (a.type === "holdStart") return this.startRecording();
+    if (a.type === "holdStart") {
+      // Holding again while reviewing a transcript discards it and records anew.
+      if (this.voice.phase === "confirm") this.voice = { phase: "idle" };
+      return this.startRecording();
+    }
     if (a.type === "holdEnd") return this.stopRecording(true);
     if (a.type === "doubleTap" && this.voice.phase !== "idle") return this.cancelVoice();
     if (a.type === "tap" && this.voice.phase === "confirm") return this.voice.send();
@@ -291,7 +295,7 @@ export class App {
     const pcm = this.joinChunks();
     this.chunks = [];
     void this.hub.log(`hold ${heldMs}ms, ${chunkCount} audio chunks, ${pcm.length} bytes`);
-    if (heldMs < 600 || pcm.length < 16000 * 2 * 0.4) {
+    if (heldMs < 600) {
       this.voice = { phase: "idle" };
       this.frozenFrame = null;
       this.toast(`Hold ended after ${(heldMs / 1000).toFixed(1)}s, nothing sent`, 4000);
@@ -318,7 +322,6 @@ export class App {
     const sendNow = async () => {
       if (sent) return;
       sent = true;
-      timer.cancel();
       this.voice = { phase: "idle" };
       this.render(true);
       try {
@@ -328,8 +331,7 @@ export class App {
       }
       this.render();
     };
-    const timer = later(() => void sendNow(), AUTO_SEND_MS);
-    this.voice = { phase: "confirm", text, timer, send: sendNow };
+    this.voice = { phase: "confirm", text, target, send: sendNow };
     this.render(true);
   }
 
@@ -339,7 +341,6 @@ export class App {
       this.stopPartials();
       await this.bridge.audioControl(false).catch(() => {});
     }
-    if (v.phase === "confirm") v.timer.cancel();
     this.voice = { phase: "idle" };
     this.toast("Cancelled", 1500);
   }

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Voice: a transcript waits for a tap to send; it no longer sends by itself.
+  Hold again to re-record, double-tap to cancel.
+- Sessions no longer freeze on "Loading…" after opening the glasses menu or a
+  dropped connection; the app recovers after the hub restarts and keeps the
+  WebView awake while a working session is on screen.
+
 ## 0.2.0
 
 First public release.
