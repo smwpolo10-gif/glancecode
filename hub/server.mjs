@@ -65,6 +65,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
   if (stats.products.length) stats.start();
 
   registry.load();
+  tmuxCtl.reloadTmuxConf().catch(() => {}); // settings added in newer versions reach a running tmux server
   const sweepTimer = setInterval(() => registry.sweep().catch(() => {}), 5000);
 
   let lastPresenceAt = 0;

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Terminal tabs show Claude Code's session title for sessions inside tmux.
 - Voice: a transcript waits for a tap to send; it no longer sends by itself.
   Hold again to re-record, double-tap to cancel.
 - Sessions no longer freeze on "Loading…" after opening the glasses menu or a

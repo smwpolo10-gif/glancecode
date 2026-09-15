@@ -1,7 +1,7 @@
 // tmux control: find panes, type into Claude Code, read the screen, launch sessions.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { TMUX_CONF, TMUX_SOCKET_NAME } from "./config.mjs";
 
@@ -26,13 +26,36 @@ set -g allow-passthrough on
 set -g status off
 set -g default-terminal "tmux-256color"
 set -as terminal-features ",*:RGB"
+# Pass Claude Code's session title (it sets the pane title) up to the terminal tab.
+set -g set-titles on
+set -g set-titles-string "#{pane_title}"
 `;
 
+const CONF_MARKER = "tmux server (tmux -L";
+
+/**
+ * Write our tmux.conf. A file we generated earlier is replaced when this version's
+ * settings differ; a file the user wrote themselves (no marker line) is left alone.
+ */
 export function ensureTmuxConf() {
-  if (existsSync(TMUX_CONF)) return TMUX_CONF;
+  if (existsSync(TMUX_CONF)) {
+    const current = readFileSync(TMUX_CONF, "utf8");
+    const ours = current.split("\n", 1)[0].includes(CONF_MARKER);
+    if (!ours || current === TMUX_CONF_TEXT) return TMUX_CONF;
+  }
   mkdirSync(dirname(TMUX_CONF), { recursive: true });
   writeFileSync(TMUX_CONF, TMUX_CONF_TEXT);
   return TMUX_CONF;
+}
+
+/** Load the current config into our tmux server if it is already running. */
+export async function reloadTmuxConf() {
+  try {
+    await tmux(null, ["source-file", ensureTmuxConf()]);
+    return true;
+  } catch {
+    return false; // no server running yet; it reads the file when it starts
+  }
 }
 
 /** Arguments that select our tmux server, or another server by socket path. */
