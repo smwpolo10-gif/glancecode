@@ -28,8 +28,9 @@
     "test": "node --test test/*.test.mjs && npm test --prefix app",
     "test:hub": "node --test test/*.test.mjs",
     "build:app": "npm ci --prefix app && npm run build --prefix app",
-    "pack:app": "npm run pack --prefix app",
-    "prepack": "npm run build:app"
+    "pack:app": "npm run pack:store --prefix app",
+    "prepack": "npm run build:app",
+    "pack:personal": "npm run pack --prefix app"
   },
   "keywords": [
     "claude-code",

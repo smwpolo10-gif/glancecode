@@ -3,6 +3,7 @@
 //   npm run pack                bump the patch version, build, pack ../glancecode.ehpk
 //   npm run pack -- minor       bump minor (or major)
 //   npm run pack -- --no-bump   pack the current version
+//   npm run pack -- --store     ignore app.local.json (the build to upload to the store)
 //
 // The Even portal replaces an upload with the same version without offering
 // phones an update, so every upload should carry a new version.
@@ -30,7 +31,7 @@ if (bump) {
 
 let packManifest = manifest;
 let out = "../glancecode.ehpk";
-if (existsSync("app.local.json")) {
+if (existsSync("app.local.json") && !args.includes("--store")) {
   const local = JSON.parse(readFileSync("app.local.json", "utf8"));
   const { extraWhitelist = [], output, ...overrides } = local;
   packManifest = { ...manifest, ...overrides, version: manifest.version };

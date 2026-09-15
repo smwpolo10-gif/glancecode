@@ -1,14 +1,15 @@
 {
   "name": "glancecode-glasses-app",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "pack": "node scripts-pack.mjs",
-    "simulate": "evenhub-simulator --automation-port 9898"
+    "simulate": "evenhub-simulator --automation-port 9898",
+    "pack:store": "node scripts-pack.mjs --store"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.15",

@@ -165,7 +165,7 @@ npm run build:app          # build the glasses app
 npm test                   # hub and app tests
 glancecode hub                # run the hub in the foreground
 glancecode pair --dev         # sideload the hub-served app with a QR code
-npm run pack:app           # bump the version and build the Even Hub package
+npm run pack:app           # bump the version and build the Even Hub store package
 ```
 
 The simulator can drive the app without glasses:
