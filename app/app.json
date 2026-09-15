@@ -1,0 +1,26 @@
+{
+  "package_id": "dev.glancecode.glasses",
+  "edition": "202601",
+  "name": "GlanceCode",
+  "version": "0.2.1",
+  "min_app_version": "2.2.10",
+  "min_sdk_version": "0.0.15",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "g2-microphone",
+      "desc": "Hold to talk: your voice is sent to the hub on your own computer and turned into a message for your session."
+    },
+    {
+      "name": "network",
+      "desc": "Connects only to the glancecode hub running on your own computer, over your private Tailscale network.",
+      "whitelist": [
+        "*.ts.net",
+        "*.ts.net:7443"
+      ]
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}

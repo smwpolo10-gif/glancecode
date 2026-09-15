@@ -1,0 +1,652 @@
+#!/usr/bin/env node
+// glancecode: set up and run the hub, and start or attach Claude Code sessions in tmux.
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const { BRAND } = await import(join(ROOT, "hub", "brand.mjs"));
+const { CONFIG_DIR, loadConfig, tailscaleAddress } = await import(join(ROOT, "hub", "config.mjs"));
+const { serverArgs, loginShellCommand } = await import(join(ROOT, "hub", "tmux.mjs"));
+const PKG = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+
+const CLI = BRAND.name;
+const HOOK_SCRIPT = join(ROOT, "bin", `${CLI}-hook`);
+const SETTINGS = join(homedir(), ".claude", "settings.json");
+const HOOK_EVENTS = [
+  "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+  "PermissionDenied", "Notification", "Stop", "StopFailure", "SessionEnd",
+];
+const IS_MAC = platform() === "darwin";
+const LAUNCH_AGENT = join(homedir(), "Library", "LaunchAgents", `${BRAND.serviceLabel}.plist`);
+const SYSTEMD_UNIT = join(homedir(), ".config", "systemd", "user", `${CLI}.service`);
+const LOG_FILE = IS_MAC ? join(homedir(), "Library", "Logs", `${CLI}.log`) : join(homedir(), ".local", "state", CLI, "hub.log");
+
+const [cmd = "help", ...rest] = process.argv.slice(2);
+
+const ok = (s) => console.log(`  ✓ ${s}`);
+const warn = (s) => console.log(`  ! ${s}`);
+const info = (s) => console.log(`    ${s}`);
+
+const commands = {
+  // ---------- one-shot setup ----------
+  async setup() {
+    console.log(`${BRAND.displayName} setup\n`);
+    const problems = await checkPrerequisites();
+    if (problems.blocking) {
+      console.log("\nFix the items above, then run setup again.");
+      process.exit(1);
+    }
+    console.log("\nHooks");
+    commands.install({ quiet: true });
+    console.log("\nVoice");
+    if (commandExists("whisper-server")) await commands["setup-voice"]();
+    else warn("whisper-server not found; hold-to-talk stays off until you install whisper.cpp");
+    console.log("\nBackground service");
+    commands.service("install");
+    console.log("\nHTTPS for the glasses app");
+    const served = commands.serve("on", { quiet: true });
+    console.log("\nPairing");
+    if (served) commands.pair();
+    else info(`After enabling HTTPS, run: ${CLI} serve && ${CLI} pair`);
+    console.log(`\nTo let the glasses drive laptop sessions, start Claude with \`${CLI} claude\`, or add to your shell rc:\n  alias claude='${CLI} claude'`);
+  },
+
+  async doctor() {
+    console.log(`${BRAND.displayName} ${PKG.version} doctor\n`);
+    const { blocking } = await checkPrerequisites();
+    const cfg = loadConfig();
+    const settings = readSettings();
+    const hooked = HOOK_EVENTS.every((e) => (settings.hooks?.[e] || []).some((g) => (g.hooks || []).some((h) => h.command === HOOK_SCRIPT)));
+    hooked ? ok("Claude Code hooks installed") : warn(`hooks not installed: ${CLI} install`);
+    const stale = staleHookCommands(settings);
+    if (stale.length) warn(`hooks point at missing scripts: ${[...new Set(stale)].join(", ")} (run ${CLI} install)`);
+    try {
+      const res = await fetch(`http://127.0.0.1:${cfg.port}/api/health`, { signal: AbortSignal.timeout(1500) });
+      res.ok ? ok(`hub running on 127.0.0.1:${cfg.port}`) : warn(`hub answered ${res.status}`);
+    } catch {
+      warn(`hub not running: ${CLI} service install (or ${CLI} hub)`);
+    }
+    existsSync(cfg.whisperModel) ? ok("speech model present") : warn(`speech model missing: ${CLI} setup-voice`);
+    const ts = tailscaleStatus();
+    if (!ts) warn("Tailscale not running on this machine");
+    else {
+      ok(`Tailscale up as ${ts.dnsName}`);
+      ts.httpsEnabled ? ok("tailnet HTTPS certificates enabled") : warn("tailnet HTTPS is off: enable it at https://login.tailscale.com/admin/dns");
+      serveActive(cfg) ? ok(`tailscale serve on https://${ts.dnsName}:${cfg.httpsPort}`) : warn(`not served over HTTPS: ${CLI} serve`);
+    }
+    if (blocking) process.exitCode = 1;
+  },
+
+  // ---------- hub ----------
+  hub() {
+    return import(join(ROOT, "hub", "server.mjs")).then(({ startHub }) => {
+      const hub = startHub();
+      const stop = () => {
+        hub.close();
+        process.exit(0);
+      };
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+    });
+  },
+
+  // ---------- Claude Code hooks ----------
+  install({ quiet = false } = {}) {
+    const settings = readSettings();
+    settings.hooks ||= {};
+    let added = 0;
+    let removed = 0;
+    for (const event of HOOK_EVENTS) {
+      const groups = (settings.hooks[event] ||= []);
+      // Drop entries from earlier installs of this tool (moved folder, old name).
+      for (const g of groups) {
+        const before = (g.hooks || []).length;
+        g.hooks = (g.hooks || []).filter((h) => !isOurHook(h.command) || h.command === HOOK_SCRIPT);
+        removed += before - g.hooks.length;
+      }
+      settings.hooks[event] = groups.filter((g) => (g.hooks || []).length);
+      if (!settings.hooks[event].some((g) => g.hooks.some((h) => h.command === HOOK_SCRIPT))) {
+        settings.hooks[event].push({ hooks: [{ type: "command", command: HOOK_SCRIPT, async: true }] });
+        added++;
+      }
+    }
+    writeSettings(settings);
+    if (added || removed) ok(`hook installed on ${added} event(s)${removed ? `, ${removed} old entr${removed === 1 ? "y" : "ies"} removed` : ""} in ${SETTINGS}`);
+    else ok("hooks already installed");
+    if (!quiet) info("Sessions already open pick it up when their settings reload; restart them if they don't appear.");
+  },
+
+  uninstall() {
+    const settings = readSettings();
+    let removed = 0;
+    for (const [event, groups] of Object.entries(settings.hooks || {})) {
+      const kept = groups
+        .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurHook(h.command)) }))
+        .filter((g) => g.hooks.length);
+      removed += groups.reduce((n, g) => n + (g.hooks || []).length, 0) - kept.reduce((n, g) => n + g.hooks.length, 0);
+      if (kept.length) settings.hooks[event] = kept;
+      else delete settings.hooks[event];
+    }
+    writeSettings(settings);
+    console.log(`Removed ${removed} ${CLI} hook entr${removed === 1 ? "y" : "ies"}.`);
+  },
+
+  // ---------- sessions ----------
+  claude() {
+    const real = findRealClaude();
+    if (process.env.TMUX) {
+      const r = spawnSync(real, rest, { stdio: "inherit" });
+      process.exit(r.status ?? 0);
+    }
+    const cwd = process.cwd();
+    const name = uniqueName(basename(cwd));
+    const r = spawnSync("tmux", [...serverArgs(null), "new-session", "-s", name, "-c", cwd, "--", ...loginShellCommand(real, rest)], { stdio: "inherit" });
+    process.exit(r.status ?? 0);
+  },
+
+  attach() {
+    const sessions = tmuxSessions();
+    if (!sessions.length) return console.log(`No ${CLI} tmux sessions running.`);
+    const want = rest[0];
+    const target = want ? sessions.find((s) => s.name === want) || sessions.find((s) => s.name.startsWith(want)) : sessions.length === 1 ? sessions[0] : null;
+    if (!target) {
+      console.log("Sessions:");
+      for (const s of sessions) console.log(`  ${s.name.padEnd(24)} ${s.attached ? "attached" : ""}`);
+      console.log(`\n${CLI} attach <name>`);
+      return;
+    }
+    const r = spawnSync("tmux", [...serverArgs(null), "attach-session", "-t", target.name], { stdio: "inherit" });
+    process.exit(r.status ?? 0);
+  },
+
+  ls() {
+    const sessions = tmuxSessions();
+    if (!sessions.length) return console.log(`No ${CLI} tmux sessions running.`);
+    for (const s of sessions) console.log(`${s.name.padEnd(24)} ${s.path}${s.attached ? "  (attached)" : ""}`);
+  },
+
+  async feed() {
+    const cfg = loadConfig();
+    const { printFeed, printState } = await import(join(ROOT, "hub", "feed.mjs"));
+    const base = `http://127.0.0.1:${cfg.port}`;
+    const headers = { Authorization: `Bearer ${cfg.token}` };
+    const known = new Map();
+    let since = 0;
+    for (;;) {
+      try {
+        const state = await (await fetch(`${base}/api/state`, { headers })).json();
+        if (!since) {
+          since = state.seq;
+          console.log(`Watching ${state.sessions.length} session(s). Ctrl-C to stop.`);
+        }
+        for (const s of state.sessions) known.set(s.id, s);
+        const res = await fetch(`${base}/api/events?since=${since}`, { headers });
+        const decoder = new TextDecoder();
+        let buf = "";
+        for await (const chunk of res.body) {
+          buf += decoder.decode(chunk, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const block = buf.slice(0, idx);
+            buf = buf.slice(idx + 2);
+            const id = /^id: (\d+)$/m.exec(block)?.[1];
+            const data = /^data: (.*)$/m.exec(block)?.[1];
+            if (id) since = Number(id);
+            if (!data) continue;
+            const ev = JSON.parse(data);
+            if (ev.type === "session") {
+              printState(ev.session, known.get(ev.session.id));
+              known.set(ev.session.id, ev.session);
+            } else if (ev.type === "items") {
+              printFeed(known.get(ev.id) || { project: ev.id.slice(0, 8) }, ev.items);
+            }
+          }
+        }
+      } catch {
+        /* hub restarting */
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  },
+
+  async status() {
+    const cfg = loadConfig();
+    try {
+      const res = await fetch(`http://127.0.0.1:${cfg.port}/api/state`, { headers: { Authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(1500) });
+      const { sessions } = await res.json();
+      console.log(`hub: running, ${sessions.length} session(s)`);
+      for (const s of sessions) console.log(`  ${s.project.padEnd(16)} ${s.state.padEnd(8)} ${s.controllable ? "tmux" : "view-only"}  ${s.activity || ""}`);
+    } catch {
+      console.log(`hub: not running (${CLI} service install, or ${CLI} hub)`);
+    }
+    console.log(`run \`${CLI} doctor\` for a full check`);
+  },
+
+  // ---------- service ----------
+  service(sub = rest[0] || "status") {
+    return IS_MAC ? launchdService(sub) : systemdService(sub);
+  },
+
+  // ---------- HTTPS through tailscale serve ----------
+  serve(sub = rest[0] || "on", { quiet = false } = {}) {
+    const cfg = loadConfig();
+    const ts = tailscaleStatus();
+    if (!ts) {
+      warn("Tailscale is not running on this machine. Install it and sign in: https://tailscale.com/download");
+      return false;
+    }
+    if (sub === "off") {
+      runTailscale(["serve", `--https=${cfg.httpsPort}`, "off"]);
+      ok("stopped serving over HTTPS");
+      return true;
+    }
+    if (sub === "status") {
+      serveActive(cfg) ? ok(`serving https://${ts.dnsName}:${cfg.httpsPort}`) : warn("not serving");
+      return serveActive(cfg);
+    }
+    if (!ts.httpsEnabled) {
+      warn("HTTPS certificates are off for your tailnet.");
+      info("Turn on HTTPS at https://login.tailscale.com/admin/dns (one click), then run this again.");
+      return false;
+    }
+    const r = runTailscale(["serve", "--bg", `--https=${cfg.httpsPort}`, `http://127.0.0.1:${cfg.port}`]);
+    if (r.status !== 0) {
+      warn(`tailscale serve failed: ${(r.stderr || r.stdout || "").trim()}`);
+      return false;
+    }
+    ok(`serving the hub at https://${ts.dnsName}:${cfg.httpsPort}`);
+    if (!quiet) info(`Pair the glasses app: ${CLI} pair`);
+    return true;
+  },
+
+  // ---------- pairing ----------
+  pair() {
+    const cfg = loadConfig();
+    const url = hubUrl(cfg);
+    if (!url) {
+      warn(`No reachable address for the phone. Run: ${CLI} serve`);
+      return;
+    }
+    const code = `${url}#${cfg.token}`;
+    console.log(`Pairing code (paste it on the phone screen of the ${BRAND.displayName} app):\n`);
+    console.log(`  ${code}\n`);
+    if (commandExists("qrencode")) {
+      console.log("Or scan this with the iPhone camera and tap Copy:");
+      spawnSync("qrencode", ["-t", "ANSIUTF8", code], { stdio: "inherit" });
+    }
+    info("Anyone with this code and access to your tailnet can type into your sessions. Keep it private.");
+    if (rest.includes("--dev")) {
+      const appUrl = `${url}/?hub=${encodeURIComponent(url)}&token=${encodeURIComponent(cfg.token)}`;
+      console.log("\nDevelopment sideload (Even app > Even Hub > developer > Scan QR):");
+      const r = spawnSync("npx", ["--yes", "@evenrealities/evenhub-cli", "qr", "--url", appUrl], { stdio: "inherit" });
+      if (r.status !== 0) console.log(appUrl);
+    }
+  },
+
+  // ---------- voice ----------
+  async "setup-voice"() {
+    const cfg = loadConfig();
+    if (existsSync(cfg.whisperModel)) {
+      ok(`speech model present (${basename(cfg.whisperModel)})`);
+      return;
+    }
+    mkdirSync(dirname(cfg.whisperModel), { recursive: true });
+    const url = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${basename(cfg.whisperModel)}`;
+    info(`downloading ${url} (about 550 MB)`);
+    const part = cfg.whisperModel + ".part";
+    const r = spawnSync("curl", ["-L", "--fail", "-#", "-o", part, url], { stdio: "inherit" });
+    if (r.status !== 0) {
+      warn("download failed; run setup-voice again later");
+      return;
+    }
+    renameSync(part, cfg.whisperModel);
+    ok("speech model downloaded");
+  },
+
+  // ---------- optional Plausible calendar feed ----------
+  async stats() {
+    const cfg = loadConfig();
+    const sub = rest[0];
+    const { PLAUSIBLE_KEY_FILE } = await import(join(ROOT, "hub", "stats.mjs"));
+    if (sub === "key") {
+      const key = await readHidden("Plausible Stats API key (input hidden): ");
+      if (!key) return console.log("No key entered; nothing changed.");
+      writeFileSync(PLAUSIBLE_KEY_FILE, key + "\n", { mode: 0o600 });
+      console.log(`Saved to ${PLAUSIBLE_KEY_FILE}. Restart the hub: ${CLI} service restart`);
+      return;
+    }
+    if (!cfg.statsProducts?.length) {
+      console.log(`No stats configured. Add "statsProducts" to ${join(CONFIG_DIR, "config.json")} (see docs/site-stats.md).`);
+      return;
+    }
+    if (sub === "url") {
+      const base = hubUrl(cfg);
+      if (!base) return warn(`No reachable address for the phone. Run: ${CLI} serve`);
+      console.log("On the iPhone: Settings > Apps > Calendar > Calendar Accounts > Add Account > Other > Add Subscribed Calendar, and paste:\n");
+      console.log(`${base.replace(/^http/, "webcal").replace(/^webcals/, "webcal")}/api/stats.ics?key=${cfg.statsToken}`);
+      console.log("\nThen make sure the Even app's Calendar widget includes it.");
+      return;
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:${cfg.port}/api/stats?refresh=1`, { headers: { Authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(60_000) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || res.status);
+      for (const line of body.lines) console.log(line);
+      if (body.updated) console.log(body.updated);
+      for (const p of body.state?.products || []) for (const e of p.errors) console.log(`  ! ${p.label} (${p.site}) ${e}`);
+    } catch (err) {
+      console.log(`hub: ${err.message} (is it running? ${CLI} service status)`);
+    }
+  },
+
+  version() {
+    console.log(`${CLI} ${PKG.version}`);
+  },
+
+  help() {
+    console.log(`${CLI} ${PKG.version} - ${BRAND.tagline}
+
+Setup
+  ${CLI} setup              install hooks, voice, background service and HTTPS, then pair
+  ${CLI} doctor             check every piece and say what to fix
+  ${CLI} pair               pairing code for the glasses app (--dev adds a sideload QR)
+
+Sessions
+  ${CLI} claude [args]      start Claude Code inside tmux so the glasses can drive it
+  ${CLI} attach [name]      open a running session in this terminal
+  ${CLI} ls                 list sessions
+  ${CLI} feed               live feed of every session
+  ${CLI} status             hub and sessions
+
+Pieces
+  ${CLI} install|uninstall  add or remove the Claude Code hook
+  ${CLI} service [install|uninstall|restart|status]
+  ${CLI} serve [on|off|status]   HTTPS on your *.ts.net name through tailscale serve
+  ${CLI} hub                run the hub in the foreground
+  ${CLI} setup-voice        download the local speech model
+  ${CLI} stats [key|url]    optional Plausible stats as a calendar feed`);
+  },
+};
+
+// ---------- prerequisites ----------
+
+async function checkPrerequisites() {
+  let blocking = false;
+  const [major] = process.versions.node.split(".").map(Number);
+  if (major >= 20) ok(`Node ${process.versions.node}`);
+  else {
+    warn(`Node ${process.versions.node} is too old; need 20 or newer`);
+    blocking = true;
+  }
+  if (commandExists("claude")) ok("Claude Code found");
+  else {
+    warn("Claude Code not found on PATH: https://claude.com/claude-code");
+    blocking = true;
+  }
+  if (commandExists("tmux")) ok("tmux found");
+  else {
+    warn(`tmux not found: ${IS_MAC ? "brew install tmux" : "install tmux with your package manager"}`);
+    blocking = true;
+  }
+  if (commandExists("curl")) ok("curl found");
+  else {
+    warn("curl not found (the hook needs it)");
+    blocking = true;
+  }
+  commandExists("whisper-server") ? ok("whisper.cpp found") : warn(`whisper.cpp not found (optional, for voice): ${IS_MAC ? "brew install whisper-cpp" : "build whisper.cpp with its server"}`);
+  tailscaleStatus() ? ok("Tailscale running") : warn("Tailscale not running (needed for the phone to reach this machine)");
+  return { blocking };
+}
+
+function commandExists(name) {
+  return spawnSync("/bin/sh", ["-c", `command -v ${name}`], { stdio: "ignore" }).status === 0;
+}
+
+// ---------- tailscale ----------
+
+function tailscaleBin() {
+  if (commandExists("tailscale")) return "tailscale";
+  const mac = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+  return existsSync(mac) ? mac : null;
+}
+
+function runTailscale(args) {
+  const bin = tailscaleBin();
+  if (!bin) return { status: 1, stderr: "tailscale not installed" };
+  return spawnSync(bin, args, { encoding: "utf8" });
+}
+
+function tailscaleStatus() {
+  const r = runTailscale(["status", "--json"]);
+  if (r.status !== 0) return null;
+  try {
+    const s = JSON.parse(r.stdout);
+    if (s.BackendState && s.BackendState !== "Running") return null;
+    return {
+      dnsName: String(s.Self?.DNSName || "").replace(/\.$/, ""),
+      ip: s.Self?.TailscaleIPs?.find((a) => a.includes(".")) || null,
+      httpsEnabled: Array.isArray(s.CertDomains) && s.CertDomains.length > 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function serveActive(cfg) {
+  const r = runTailscale(["serve", "status", "--json"]);
+  if (r.status !== 0) return false;
+  try {
+    const s = JSON.parse(r.stdout || "{}");
+    return Object.keys(s.TCP || {}).includes(String(cfg.httpsPort));
+  } catch {
+    return false;
+  }
+}
+
+/** The address the phone should use: HTTPS through tailscale serve, else the raw IP if enabled. */
+function hubUrl(cfg) {
+  const ts = tailscaleStatus();
+  if (ts && serveActive(cfg)) return `https://${ts.dnsName}:${cfg.httpsPort}`;
+  const ip = cfg.bindTailscaleIP ? tailscaleAddress() : null;
+  return ip ? `http://${ip}:${cfg.port}` : null;
+}
+
+// ---------- services ----------
+
+function servicePath() {
+  return [dirname(process.execPath), "/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local", "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
+}
+
+function launchdService(sub) {
+  const uid = process.getuid();
+  const legacy = BRAND.legacy.serviceLabels.map((l) => join(homedir(), "Library", "LaunchAgents", `${l}.plist`));
+  if (sub === "install") {
+    for (const old of legacy) {
+      if (!existsSync(old)) continue;
+      spawnSync("launchctl", ["bootout", `gui/${uid}`, old], { stdio: "ignore" });
+      renameSync(old, old + ".migrated");
+      ok(`stopped the old service (${basename(old)})`);
+    }
+    mkdirSync(dirname(LOG_FILE), { recursive: true });
+    const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${BRAND.serviceLabel}</string>
+  <key>ProgramArguments</key>
+  <array><string>${process.execPath}</string><string>${join(ROOT, "bin", CLI)}</string><string>hub</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>${servicePath()}</string><key>SHELL</key><string>${process.env.SHELL || "/bin/zsh"}</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${LOG_FILE}</string>
+  <key>StandardErrorPath</key><string>${LOG_FILE}</string>
+</dict>
+</plist>
+`;
+    mkdirSync(dirname(LAUNCH_AGENT), { recursive: true });
+    spawnSync("launchctl", ["bootout", `gui/${uid}`, LAUNCH_AGENT], { stdio: "ignore" });
+    writeFileSync(LAUNCH_AGENT, plist);
+    const r = spawnSync("launchctl", ["bootstrap", `gui/${uid}`, LAUNCH_AGENT], { stdio: "pipe", encoding: "utf8" });
+    if (r.status !== 0) {
+      warn(`launchctl failed: ${(r.stderr || "").trim()}`);
+      return;
+    }
+    ok(`hub service running (logs: ${LOG_FILE})`);
+  } else if (sub === "uninstall") {
+    spawnSync("launchctl", ["bootout", `gui/${uid}`, LAUNCH_AGENT], { stdio: "ignore" });
+    rmSync(LAUNCH_AGENT, { force: true });
+    ok("hub service removed");
+  } else if (sub === "restart") {
+    spawnSync("launchctl", ["kickstart", "-k", `gui/${uid}/${BRAND.serviceLabel}`], { stdio: "inherit" });
+    ok("restarted");
+  } else {
+    const r = spawnSync("launchctl", ["print", `gui/${uid}/${BRAND.serviceLabel}`], { encoding: "utf8" });
+    console.log(r.status === 0 ? (/state = (\w+)/.exec(r.stdout)?.[0] || "loaded") : `not installed (${CLI} service install)`);
+  }
+}
+
+function systemdService(sub) {
+  const ctl = (...a) => spawnSync("systemctl", ["--user", ...a], { stdio: "inherit" });
+  if (sub === "install") {
+    mkdirSync(dirname(SYSTEMD_UNIT), { recursive: true });
+    mkdirSync(dirname(LOG_FILE), { recursive: true });
+    writeFileSync(SYSTEMD_UNIT, `[Unit]
+Description=${BRAND.displayName} hub
+After=network-online.target
+
+[Service]
+ExecStart=${process.execPath} ${join(ROOT, "bin", CLI)} hub
+Environment=PATH=${servicePath()}
+Environment=SHELL=${process.env.SHELL || "/bin/bash"}
+Restart=always
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
+
+[Install]
+WantedBy=default.target
+`);
+    ctl("daemon-reload");
+    ctl("enable", "--now", `${CLI}.service`);
+    ok(`hub service running (logs: ${LOG_FILE})`);
+  } else if (sub === "uninstall") {
+    ctl("disable", "--now", `${CLI}.service`);
+    rmSync(SYSTEMD_UNIT, { force: true });
+    ok("hub service removed");
+  } else if (sub === "restart") {
+    ctl("restart", `${CLI}.service`);
+  } else {
+    ctl("status", "--no-pager", `${CLI}.service`);
+  }
+}
+
+// ---------- helpers ----------
+
+function isOurHook(command) {
+  if (typeof command !== "string") return false;
+  const name = basename(command);
+  return name === `${CLI}-hook` || BRAND.legacy.hookScripts.includes(name);
+}
+
+function staleHookCommands(settings) {
+  const out = [];
+  for (const groups of Object.values(settings.hooks || {})) {
+    for (const g of groups) for (const h of g.hooks || []) if (isOurHook(h.command) && !existsSync(h.command)) out.push(h.command);
+  }
+  return out;
+}
+
+function readHidden(prompt) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    process.stdout.write(prompt);
+    if (!stdin.isTTY) {
+      let data = "";
+      stdin.on("data", (c) => (data += c));
+      stdin.on("end", () => resolve(data.trim()));
+      return;
+    }
+    let value = "";
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    const onData = (ch) => {
+      if (ch === "\r" || ch === "\n" || ch === "") {
+        stdin.setRawMode(false);
+        stdin.pause();
+        stdin.off("data", onData);
+        process.stdout.write("\n");
+        resolve(value.trim());
+      } else if (ch === "") {
+        process.stdout.write("\n");
+        process.exit(130);
+      } else if (ch === "") {
+        value = value.slice(0, -1);
+      } else {
+        value += ch;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+function readSettings() {
+  if (!existsSync(SETTINGS)) return {};
+  return JSON.parse(readFileSync(SETTINGS, "utf8"));
+}
+
+function writeSettings(settings) {
+  mkdirSync(dirname(SETTINGS), { recursive: true });
+  if (existsSync(SETTINGS)) copyFileSync(SETTINGS, `${SETTINGS}.bak-${CLI}`);
+  const tmp = SETTINGS + ".tmp";
+  writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
+  renameSync(tmp, SETTINGS);
+}
+
+function findRealClaude() {
+  const r = spawnSync("/bin/sh", ["-c", "command -v -a claude || which -a claude"], { encoding: "utf8" });
+  const candidates = (r.stdout || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((p) => p.startsWith("/") && !p.startsWith(ROOT) && !isThisCli(p));
+  if (!candidates.length) {
+    console.error("claude not found on PATH");
+    process.exit(1);
+  }
+  return candidates[0];
+}
+
+function isThisCli(path) {
+  try {
+    return readFileSync(path, "utf8").slice(0, 200).includes(`${CLI}: set up and run the hub`);
+  } catch {
+    return false;
+  }
+}
+
+function tmuxSessions() {
+  const r = spawnSync("tmux", [...serverArgs(null), "list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{pane_current_path}"], { encoding: "utf8" });
+  if (r.status !== 0) return [];
+  return r.stdout.split("\n").filter(Boolean).map((l) => {
+    const [name, attached, path] = l.split("\t");
+    return { name, attached: attached !== "0", path };
+  });
+}
+
+function uniqueName(base) {
+  const clean = (base || "claude").replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 24);
+  const taken = new Set(tmuxSessions().map((s) => s.name));
+  let name = clean;
+  for (let n = 2; taken.has(name); n++) name = `${clean}-${n}`;
+  return name;
+}
+
+const fn = commands[cmd] || (cmd === "--version" || cmd === "-v" ? commands.version : null);
+if (!fn) {
+  commands.help();
+  process.exit(cmd === "help" || cmd === "--help" || cmd === "-h" ? 0 : 1);
+}
+await fn();

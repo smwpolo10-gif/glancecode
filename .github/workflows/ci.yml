@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Hub tests
+        run: node --test test/*.test.mjs
+      - name: Install app dependencies
+        run: npm ci --prefix app
+      - name: Type-check and build the glasses app
+        run: npm run build --prefix app
+      - name: App tests
+        if: matrix.node == 22
+        run: npm test --prefix app
+      - name: CLI smoke test
+        env:
+          GLANCECODE_CONFIG_DIR: ${{ runner.temp }}/glancecode-config
+          GLANCECODE_DATA_DIR: ${{ runner.temp }}/glancecode-data
+        run: |
+          node bin/glancecode help
+          node bin/glancecode version

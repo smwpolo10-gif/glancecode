@@ -1,0 +1,16 @@
+# Changelog
+
+## 0.2.0
+
+First public release.
+
+- Hub follows every Claude Code session through hooks and transcripts, and
+  types into sessions that run inside tmux.
+- Glasses app: session list, live transcript, approvals and questions with the
+  real option labels, hold to talk with a live preview, new and resumed
+  sessions, and a menu for interrupt, model switch and compact.
+- Local speech to text with whisper.cpp.
+- `glancecode setup`, `doctor`, `serve` (HTTPS through tailscale serve) and `pair`.
+- Background service on macOS (launchd) and Linux (systemd user unit).
+- Built-in demo in the glasses app, used before pairing.
+- Optional Plausible stats as a subscribed calendar for the G2 dashboard.

@@ -1,0 +1,49 @@
+{
+  "name": "glancecode",
+  "version": "0.2.0",
+  "description": "Drive your Claude Code sessions from Even Realities G2 smart glasses: live transcript, approvals, and hold-to-talk voice, running on your own machine.",
+  "type": "module",
+  "bin": {
+    "glancecode": "bin/glancecode"
+  },
+  "files": [
+    "bin/glancecode",
+    "bin/glancecode-hook",
+    "hub/",
+    "app/dist/",
+    "docs/",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs && npm test --prefix app",
+    "test:hub": "node --test test/*.test.mjs",
+    "build:app": "npm ci --prefix app && npm run build --prefix app",
+    "pack:app": "npm run pack --prefix app",
+    "prepack": "npm run build:app"
+  },
+  "keywords": [
+    "claude-code",
+    "even-realities",
+    "g2",
+    "smart-glasses",
+    "tmux",
+    "even-hub"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/glancecode.git"
+  },
+  "homepage": "https://github.com/OWNER/glancecode#readme",
+  "bugs": "https://github.com/OWNER/glancecode/issues"
+}

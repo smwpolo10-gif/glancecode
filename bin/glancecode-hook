@@ -1,0 +1,11 @@
+#!/bin/bash
+# Claude Code hook -> glancecode hub. Registered as an async command hook, so it
+# never slows Claude down, and it always exits 0 so a stopped hub is harmless.
+curl -s -m 2 -o /dev/null -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-Tmux: ${TMUX:-}" \
+  -H "X-Tmux-Pane: ${TMUX_PANE:-}" \
+  -H "X-Ppid: ${PPID}" \
+  --data-binary @- \
+  "http://127.0.0.1:${GLANCECODE_HOOK_PORT:-7718}/hook" >/dev/null 2>&1
+exit 0

@@ -1,0 +1,268 @@
+// tmux control: find panes, type into Claude Code, read the screen, launch sessions.
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { TMUX_CONF, TMUX_SOCKET_NAME } from "./config.mjs";
+
+const run = promisify(execFile);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** `$TMUX` is "socketPath,serverPid,sessionIndex". */
+export function socketFromTmuxEnv(tmuxEnv) {
+  if (!tmuxEnv || typeof tmuxEnv !== "string") return null;
+  const path = tmuxEnv.split(",")[0];
+  return path || null;
+}
+
+// Applied when our dedicated tmux server starts. Tuned for Claude Code.
+export const TMUX_CONF_TEXT = `# glancecode tmux server (tmux -L ${TMUX_SOCKET_NAME})
+set -g mouse on
+set -g history-limit 50000
+set -s escape-time 10
+set -g focus-events on
+set -g extended-keys on
+set -g allow-passthrough on
+set -g status off
+set -g default-terminal "tmux-256color"
+set -as terminal-features ",*:RGB"
+`;
+
+export function ensureTmuxConf() {
+  if (existsSync(TMUX_CONF)) return TMUX_CONF;
+  mkdirSync(dirname(TMUX_CONF), { recursive: true });
+  writeFileSync(TMUX_CONF, TMUX_CONF_TEXT);
+  return TMUX_CONF;
+}
+
+/** Arguments that select our tmux server, or another server by socket path. */
+export function serverArgs(socket) {
+  return socket ? ["-S", socket] : ["-L", TMUX_SOCKET_NAME, "-f", ensureTmuxConf()];
+}
+
+export async function tmux(socket, args, { timeout = 5000 } = {}) {
+  const base = serverArgs(socket);
+  const { stdout } = await run("tmux", [...base, ...args], { timeout, maxBuffer: 4 * 1024 * 1024 });
+  return stdout;
+}
+
+/** True when the pane still exists. tmux exits 0 for some missing targets, so compare output. */
+export async function paneAlive(target) {
+  try {
+    const out = await tmux(target.socket, ["display-message", "-p", "-t", target.pane, "#{pane_id}"]);
+    return out.trim() === target.pane;
+  } catch {
+    return false;
+  }
+}
+
+export async function capture(target, lines = 60) {
+  const out = await tmux(target.socket, ["capture-pane", "-p", "-J", "-t", target.pane, "-S", `-${lines}`]);
+  return out.replace(/\s+$/gm, "");
+}
+
+/**
+ * What is Claude Code showing at the bottom of the pane?
+ * @returns {{kind: "permission"|"question"|"trust"|"input"|"unknown", options: string[]}}
+ */
+export function readDialog(screen) {
+  const tail = screen.split("\n").filter((l) => l.trim()).slice(-30);
+  const joined = tail.join("\n");
+  const options = [];
+  for (const l of tail) {
+    const m = /^\s*(?:❯\s*)?(\d+)\.\s+(.+?)\s*$/.exec(l);
+    if (m) options[Number(m[1]) - 1] = m[2];
+  }
+  const clean = options.filter(Boolean);
+  if (/Yes, I trust this folder/.test(joined)) return { kind: "trust", options: clean };
+  if (/Do you want to (proceed|make this edit|create|allow)/i.test(joined) && clean.length) return { kind: "permission", options: clean };
+  if (/Enter to select/.test(joined) && clean.length) return { kind: "question", options: clean };
+  if (/^\s*❯\s*/m.test(tail.slice(-4).join("\n"))) return { kind: "input", options: [] };
+  return { kind: "unknown", options: clean };
+}
+
+/**
+ * Scrolling with the mouse in an attached tmux client puts the pane in copy mode,
+ * where typed keys become copy-mode commands and never reach Claude Code.
+ */
+export async function leaveCopyMode(target) {
+  const inMode = (await tmux(target.socket, ["display-message", "-p", "-t", target.pane, "#{pane_in_mode}"])).trim();
+  if (inMode === "1") await tmux(target.socket, ["send-keys", "-X", "-t", target.pane, "cancel"]);
+  return inMode === "1";
+}
+
+/** Type a prompt into Claude Code's input box and submit it. */
+export async function sendPrompt(target, text) {
+  const flat = String(text).replace(/\r?\n+/g, " ").trim();
+  if (!flat) return;
+  await leaveCopyMode(target);
+  await tmux(target.socket, ["send-keys", "-t", target.pane, "-l", flat]);
+  await sleep(120); // let the TUI absorb a paste-sized burst before submitting
+  await tmux(target.socket, ["send-keys", "-t", target.pane, "Enter"]);
+}
+
+const KEY_WHITELIST = new Set(["Escape", "Enter", "Up", "Down", "Tab", "BTab", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+
+export async function sendKey(target, key) {
+  if (!KEY_WHITELIST.has(key)) throw new Error(`key not allowed: ${key}`);
+  await leaveCopyMode(target);
+  await tmux(target.socket, ["send-keys", "-t", target.pane, key]);
+}
+
+/**
+ * Press an option number only if the expected dialog is on screen, so a digit
+ * never lands in the prompt box by accident.
+ */
+export async function chooseOption(target, expectedKind, index) {
+  const dialog = readDialog(await capture(target));
+  if (dialog.kind !== expectedKind) {
+    throw Object.assign(new Error(`no ${expectedKind} dialog on screen (saw ${dialog.kind})`), { status: 409 });
+  }
+  if (index < 0 || index >= dialog.options.length || index > 8) {
+    throw Object.assign(new Error(`option ${index + 1} not available`), { status: 400 });
+  }
+  await sendKey(target, String(index + 1));
+  return dialog.options[index];
+}
+
+/**
+ * Switch the session's model with /model, confirm the cache-reset dialog if it
+ * appears, and put the user's saved default back: /model also rewrites the
+ * default in ~/.claude/settings.json, and a glasses switch should only change
+ * this one session.
+ */
+export async function switchModel(target, model, settingsPath) {
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const readModel = () => {
+    try {
+      return JSON.parse(readFileSync(settingsPath, "utf8")).model;
+    } catch {
+      return undefined;
+    }
+  };
+  const before = readModel();
+  await sendPrompt(target, `/model ${model}`);
+  const until = Date.now() + 4000;
+  let confirmed = false;
+  while (Date.now() < until) {
+    await sleep(300);
+    const screen = await capture(target, 30);
+    const m = /(\d+)\.\s+Yes, switch to/.exec(screen);
+    if (m && !confirmed) {
+      await sendKey(target, m[1]);
+      confirmed = true;
+      continue;
+    }
+    if (/Set model to/.test(screen.split("\n").slice(-12).join("\n"))) break;
+  }
+  await sleep(300);
+  const after = readModel();
+  if (after !== before) {
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    if (before === undefined) delete settings.model;
+    else settings.model = before;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  }
+  return { restoredDefault: after !== before ? before ?? null : null };
+}
+
+/** Answer a question with free text via its "Type something" option. */
+export async function answerWithText(target, text) {
+  const dialog = readDialog(await capture(target));
+  if (dialog.kind !== "question") throw Object.assign(new Error("no question on screen"), { status: 409 });
+  const idx = dialog.options.findIndex((o) => /^Type something/i.test(o));
+  if (idx < 0) throw Object.assign(new Error("question has no free-text option"), { status: 400 });
+  await sendKey(target, String(idx + 1));
+  await sleep(250);
+  await sendPrompt(target, text);
+}
+
+export function sessionNameFor(cwd, taken) {
+  const base = (cwd.split("/").filter(Boolean).pop() || "claude").replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 24);
+  let name = base;
+  for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
+  return name;
+}
+
+export async function listOurSessions() {
+  try {
+    const out = await tmux(null, ["list-sessions", "-F", "#{session_name}"]);
+    return new Set(out.split("\n").filter(Boolean));
+  } catch {
+    return new Set(); // no server yet
+  }
+}
+
+/**
+ * Start Claude Code in a detached tmux session on our dedicated tmux server.
+ * @returns {{name: string, target: {socket: string, pane: string}}}
+ */
+/**
+ * Run a command through the user's login shell, so sessions started by a
+ * background service still get the PATH and variables from their shell config.
+ */
+export function loginShellCommand(bin, args = []) {
+  const shell = process.env.SHELL || "/bin/zsh";
+  return [shell, "-lic", 'exec "$@"', shell, bin, ...args];
+}
+
+export async function launchClaude({ cwd, args = [], claudeBin = "claude", env = {} }) {
+  const name = sessionNameFor(cwd, await listOurSessions());
+  const envArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+  await tmux(null, [
+    "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50", ...envArgs,
+    "--", ...loginShellCommand(claudeBin, args),
+  ]);
+  const info = await tmux(null, ["display-message", "-p", "-t", name, "#{socket_path} #{pane_id}"]);
+  const [socket, pane] = info.trim().split(" ");
+  return { name, target: { socket, pane } };
+}
+
+/** Accept the folder-trust dialog if it appears within `waitMs`. */
+export async function acceptTrustIfShown(target, waitMs = 8000) {
+  const until = Date.now() + waitMs;
+  while (Date.now() < until) {
+    let dialog;
+    try {
+      dialog = readDialog(await capture(target));
+    } catch {
+      return false;
+    }
+    if (dialog.kind === "trust") {
+      // The trust dialog is an unnumbered two-item menu with "No, exit" focused.
+      await sendKey(target, "Down");
+      await sleep(250);
+      await sendKey(target, "Enter");
+      return true;
+    }
+    if (dialog.kind === "input") return false;
+    await sleep(400);
+  }
+  return false;
+}
+
+/** Wait until Claude Code shows its input prompt. */
+export async function waitForInput(target, waitMs = 20000) {
+  const until = Date.now() + waitMs;
+  while (Date.now() < until) {
+    try {
+      if (readDialog(await capture(target)).kind === "input") return true;
+    } catch {
+      /* pane not ready */
+    }
+    await sleep(400);
+  }
+  return false;
+}
+
+/** Whitespace-insensitive snippet used to confirm a prompt reached Claude Code. */
+export function promptSnippet(text) {
+  return String(text).replace(/\s+/g, " ").trim().slice(0, 40);
+}
+
+export function screenHasSnippet(screen, snippet) {
+  if (!snippet) return true;
+  const flat = screen.replace(/\s+/g, " ");
+  // Wrapped lines add spaces at arbitrary points, so also compare with spaces removed.
+  return flat.includes(snippet) || flat.replace(/ /g, "").includes(snippet.replace(/ /g, ""));
+}
