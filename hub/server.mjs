@@ -1,5 +1,6 @@
 // The hub: HTTP API for the glasses app, hook intake for Claude Code, live feed in the terminal.
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { timingSafeEqual } from "node:crypto";
@@ -59,6 +60,15 @@ export function startHub({ quiet = false, feed = true } = {}) {
   registry.on("finished", (s, last) => {
     notifier.send(`${s.id}:done`, `${s.project} finished`, last.replace(/\s+/g, " ") || "Turn complete");
   });
+
+  // A sleeping Mac answers nothing, so the glasses see a dead hub. `caffeinate -s`
+  // holds it awake only while it's plugged in; on battery it sleeps as usual.
+  let awake = null;
+  if (cfg.preventSleep && process.platform === "darwin") {
+    awake = spawn("caffeinate", ["-s", "-w", String(process.pid)], { stdio: "ignore", detached: true });
+    awake.unref();
+    awake.on("error", (err) => log(`could not hold the Mac awake: ${err.message}`));
+  }
 
   registry.load();
   tmuxCtl.reloadTmuxConf().catch(() => {}); // settings added in newer versions reach a running tmux server
@@ -374,12 +384,14 @@ export function startHub({ quiet = false, feed = true } = {}) {
   if (!transcriber.available) log(`voice: speech model missing, run \`${BRAND.name} setup-voice\``);
   else transcriber.ensure().then(() => log("voice: whisper ready")).catch((err) => log(`voice: ${err.message}`));
   if (notifier.enabled) log(`phone push: ntfy topic set`);
+  if (awake) log("holding the Mac awake while plugged in");
 
   return {
     cfg,
     registry,
     close() {
       clearInterval(sweepTimer);
+      awake?.kill();
       for (const res of clients) res.end();
       hookServer.close();
       for (const s of apiServers) s.close();

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The hub keeps a plugged-in Mac awake, so a sleeping machine no longer looks
+  like a dead hub from the glasses. Turn it off with `"preventSleep": false`.
+
 ## 0.4.0
 
 - Removed the Plausible stats calendar feed (`glancecode stats`, `statsProducts`,

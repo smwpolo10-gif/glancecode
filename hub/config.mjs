@@ -34,6 +34,9 @@ const DEFAULTS = {
   ntfyServer: "https://ntfy.sh",
   // Extra arguments for sessions the glasses start (for example ["--model", "sonnet"]).
   claudeArgs: [],
+  // macOS: hold the machine awake while the hub runs, so the glasses can reach it.
+  // Only while plugged in; on battery the Mac still sleeps normally.
+  preventSleep: true,
 };
 
 /** Read the raw config file without generating tokens (used at import time). */

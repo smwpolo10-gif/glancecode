@@ -148,6 +148,7 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability and
 | `sttVocabulary` | | words the speech model should expect |
 | `ntfyTopic` | empty | optional phone push through ntfy when a session finishes or needs you |
 | `bindTailscaleIP` | false | also listen on the raw Tailscale IP over plain HTTP, for development |
+| `preventSleep` | true | macOS: keep the Mac awake while plugged in, so the glasses can reach it |
 ## Limitations
 
 - Even Hub apps only run while they're open on the glasses. To hear about a
