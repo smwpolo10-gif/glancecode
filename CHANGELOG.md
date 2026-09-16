@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
 - The hub keeps a plugged-in Mac awake, so a sleeping machine no longer looks
   like a dead hub from the glasses. Turn it off with `"preventSleep": false`.
