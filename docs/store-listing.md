@@ -42,9 +42,18 @@ list, a working session, an approval (tap to approve), hold to talk, and the men
 
 **Screenshots:** `docs/screenshots/01-home.png` to `05-menu.png` (576×288, PNG with a
 transparent background). Even Hub rejects solid black backgrounds, because the display
-is see-through: black is the part you look through. Regenerate them from a capture with
-`magick shot.png -alpha off \( +clone -separate -evaluate-sequence max \) -compose copy_opacity -composite out.png`,
-which keeps the text and turns everything black into transparency.
+is see-through: black is the part you look through, and the portal previews the
+screenshot over a blurred room photo. To rebuild them from a black-background capture:
+
+```sh
+magick shot.png -alpha off -separate -evaluate-sequence max \
+  -morphology Dilate Octagon:1 -level 0%,70% mask.png
+magick -size 576x288 xc:"#00FF00" mask.png -alpha off \
+  -compose copy_opacity -composite out.png
+```
+
+The mask carries the text, dilated and brightened a little so the thin strokes stay
+readable against a light background, and the color is the display's green.
 
 **Privacy policy URL:** https://github.com/sousyllc/glancecode/blob/main/docs/privacy.md
 
