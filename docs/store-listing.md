@@ -40,7 +40,11 @@ on the glasses, and every screen is available with sample sessions: the session
 list, a working session, an approval (tap to approve), hold to talk, and the menu
 (tap then hold). Double-tap on the session list exits.
 
-**Screenshots:** `docs/screenshots/01-home.png` to `05-menu.png` (576×288).
+**Screenshots:** `docs/screenshots/01-home.png` to `05-menu.png` (576×288, PNG with a
+transparent background). Even Hub rejects solid black backgrounds, because the display
+is see-through: black is the part you look through. Regenerate them from a capture with
+`magick shot.png -alpha off \( +clone -separate -evaluate-sequence max \) -compose copy_opacity -composite out.png`,
+which keeps the text and turns everything black into transparency.
 
 **Privacy policy URL:** https://github.com/sousyllc/glancecode/blob/main/docs/privacy.md
 
