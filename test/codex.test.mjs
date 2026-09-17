@@ -122,7 +122,9 @@ test("websocket client: handshake, masked sends, long and fragmented messages", 
   server.on("upgrade", (req, socket) => {
     const accept = createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    socket.on("data", (buf) => {
+    socket.on("error", () => {}); // the client hangs up at the end of the test
+    socket.once("data", (buf) => {
+      // Answer the first message only; the next frame is the client's close.
       // Decode one masked client frame (the test only sends small ones).
       const len = buf[1] & 0x7f;
       const mask = buf.subarray(2, 6);
