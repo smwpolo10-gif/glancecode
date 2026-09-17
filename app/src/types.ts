@@ -2,6 +2,9 @@
 
 export type State = "starting" | "working" | "idle" | "waiting" | "ended";
 
+/** Which coding agent a session runs. Hubs before Codex support leave it out. */
+export type Agent = "claude" | "codex";
+
 export interface Waiting {
   kind: "permission" | "question";
   tool?: string;
@@ -12,6 +15,7 @@ export interface Waiting {
 
 export interface SessionSummary {
   id: string;
+  agent?: Agent;
   project: string;
   cwd: string;
   state: State;
@@ -40,10 +44,16 @@ export interface Item {
 
 export interface RecentSession {
   id: string;
+  agent?: Agent;
   cwd: string;
   project: string;
   title: string;
   mtime: number;
+}
+
+export interface ModelChoice {
+  id: string;
+  name: string;
 }
 
 export interface RecentProject {

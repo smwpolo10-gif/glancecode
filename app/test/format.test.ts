@@ -68,5 +68,6 @@ test("items render with turn gaps and collapsed tool runs", () => {
 test("model names shorten", () => {
   assert.equal(shortModel("claude-opus-5"), "Opus 5");
   assert.equal(shortModel("claude-fable-5-1[1m]"), "Fable 5.1");
+  assert.equal(shortModel("gpt-5.6-sol"), "GPT-5.6-sol");
   assert.equal(shortModel("claude-haiku-4-5-20251001"), "Haiku 4.5");
 });

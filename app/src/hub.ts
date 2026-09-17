@@ -1,5 +1,5 @@
 // Client for the glancecode hub: REST calls plus a replaying event stream.
-import type { HubEvent, Item, RecentProject, RecentSession, SessionSummary } from "./types.ts";
+import type { Agent, HubEvent, Item, ModelChoice, RecentProject, RecentSession, SessionSummary } from "./types.ts";
 import { every } from "./timers.ts";
 
 export interface HubConfig {
@@ -9,9 +9,19 @@ export interface HubConfig {
 
 type Listener = () => void;
 
+const DEFAULT_CLAUDE_MODELS: ModelChoice[] = [
+  { id: "opus", name: "Opus" },
+  { id: "sonnet", name: "Sonnet" },
+  { id: "fable", name: "Fable" },
+  { id: "haiku", name: "Haiku" },
+];
+
 export class Hub {
   sessions = new Map<string, SessionSummary>();
   items = new Map<string, Item[]>();
+  /** Agents the hub can start. Older hubs don't say, and only run Claude Code. */
+  agents: Agent[] = ["claude"];
+  private modelCache = new Map<string, ModelChoice[]>();
   connected = false;
   lastError = "";
   private es: EventSource | null = null;
@@ -68,8 +78,9 @@ export class Hub {
     if (this.connecting) return;
     this.connecting = true;
     try {
-      const state = await this.req<{ seq: number; sessions: SessionSummary[] }>("GET", "/api/state");
+      const state = await this.req<{ seq: number; agents?: Agent[]; sessions: SessionSummary[] }>("GET", "/api/state");
       this.sessions = new Map(state.sessions.map((s) => [s.id, s]));
+      this.agents = state.agents?.length ? state.agents : ["claude"];
       this.lastEventId = state.seq;
       this.openStream();
       this.connected = true;
@@ -128,8 +139,9 @@ export class Hub {
   /** After the stream comes back: refresh sessions and cached transcripts, keep the stream. */
   private async resync() {
     try {
-      const state = await this.req<{ seq: number; sessions: SessionSummary[] }>("GET", "/api/state");
+      const state = await this.req<{ seq: number; agents?: Agent[]; sessions: SessionSummary[] }>("GET", "/api/state");
       this.sessions = new Map(state.sessions.map((s) => [s.id, s]));
+      this.agents = state.agents?.length ? state.agents : ["claude"];
       for (const id of [...this.items.keys()]) {
         if (!this.sessions.has(id)) this.items.delete(id);
         else void this.loadItems(id).catch(() => {});
@@ -224,10 +236,24 @@ export class Hub {
     return this.req("POST", `/api/sessions/${id}/command`, { command });
   }
   recent() {
-    return this.req<{ projects: RecentProject[]; sessions: RecentSession[] }>("GET", "/api/recent");
+    return this.req<{ agents?: Agent[]; projects: RecentProject[]; sessions: RecentSession[] }>("GET", "/api/recent");
   }
-  launch(cwd: string, resume?: string) {
-    return this.req<{ session: SessionSummary }>("POST", "/api/sessions", { cwd, resume });
+  launch(cwd: string, resume?: string, agent?: Agent) {
+    return this.req<{ session: SessionSummary }>("POST", "/api/sessions", { cwd, resume, agent });
+  }
+  /** Models a session can switch to. Per agent, since every session of an agent offers the same list. */
+  async models(id: string): Promise<ModelChoice[]> {
+    const agent = this.sessions.get(id)?.agent || "claude";
+    const cached = this.modelCache.get(agent);
+    if (cached) return cached;
+    try {
+      const { models } = await this.req<{ models: ModelChoice[] }>("GET", `/api/sessions/${id}/models`);
+      this.modelCache.set(agent, models);
+      return models;
+    } catch {
+      // Hubs before Codex support have no models endpoint; they take these names.
+      return agent === "claude" ? DEFAULT_CLAUDE_MODELS : [];
+    }
   }
   log(message: string) {
     return this.req("POST", "/api/log", { message }).catch(() => {});

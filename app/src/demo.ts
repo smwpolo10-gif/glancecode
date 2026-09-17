@@ -3,7 +3,7 @@
 // screen without a machine running the hub.
 import { Hub } from "./hub.ts";
 import { every, later, type Cancel } from "./timers.ts";
-import type { Item, RecentProject, RecentSession, SessionSummary } from "./types.ts";
+import type { Agent, Item, ModelChoice, RecentProject, RecentSession, SessionSummary } from "./types.ts";
 
 const now = () => Date.now();
 let keySeq = 0;
@@ -12,6 +12,7 @@ const iso = (msAgo = 0) => new Date(now() - msAgo).toISOString();
 
 function session(partial: Partial<SessionSummary> & Pick<SessionSummary, "id" | "project">): SessionSummary {
   return {
+    agent: "claude",
     cwd: `~/code/${partial.project}`,
     state: "idle",
     activity: "",
@@ -53,6 +54,7 @@ export class DemoHub extends Hub {
 
   constructor() {
     super({ url: "demo", token: "" });
+    this.agents = ["claude", "codex"];
   }
 
   override async connect() {
@@ -77,7 +79,8 @@ export class DemoHub extends Hub {
       lastActivity: now() - 60_000,
     });
     const c = session({ id: "00000000-0000-4000-8000-000000000003", project: "docs-site", title: "Rewrite the install guide", lastActivity: now() - 40 * 60_000 });
-    for (const s of [a, b, c]) this.sessions.set(s.id, s);
+    const d = session({ id: "00000000-0000-4000-8000-000000000004", agent: "codex", project: "billing", model: "gpt-5.5", title: "Add invoice PDFs", lastActivity: now() - 12 * 60_000 });
+    for (const s of [a, b, c, d]) this.sessions.set(s.id, s);
     this.items.set(a.id, [
       item("user", "The signup test fails about one run in ten on CI. Find out why and fix it.", undefined, 300_000),
       item("assistant", "Looking at the signup flow and its test first.", undefined, 290_000),
@@ -89,6 +92,13 @@ export class DemoHub extends Hub {
       item("tool", "Build the web bundle", "Bash", 100_000),
       item("assistant", "The build passed. Deploying to staging next.", undefined, 70_000),
       item("tool", "Deploy the web build to staging", "Bash", 60_000),
+    ]);
+    this.items.set(d.id, [
+      item("user", "Invoices need a PDF download. Add it next to the CSV export.", undefined, 20 * 60_000),
+      item("tool", "invoices.ts", "Read", 19 * 60_000),
+      item("tool", "invoices.ts, routes.ts", "Edit", 16 * 60_000),
+      item("tool", "npm test", "Shell", 14 * 60_000),
+      item("assistant", "Invoices now have a PDF download next to CSV. Tests pass.", undefined, 12 * 60_000),
     ]);
     this.items.set(c.id, [
       item("user", "Rewrite the install guide so it starts with the one-line setup.", undefined, 50 * 60_000),
@@ -133,7 +143,7 @@ export class DemoHub extends Hub {
     s.activity = "Thinking";
     this.notify();
     later(() => {
-      this.add(id, item("assistant", "This is the demo, so nothing ran. Pair the app with your own machine to talk to real Claude Code sessions."));
+      this.add(id, item("assistant", "This is the demo, so nothing ran. Pair the app with your own machine to talk to real Claude Code and Codex sessions."));
       s.state = "idle";
       s.activity = "";
       s.lastActivity = now();
@@ -188,19 +198,34 @@ export class DemoHub extends Hub {
     return {};
   }
 
-  override async recent(): Promise<{ projects: RecentProject[]; sessions: RecentSession[] }> {
+  override async models(id: string): Promise<ModelChoice[]> {
+    return this.sessions.get(id)?.agent === "codex"
+      ? [
+          { id: "gpt-5.5", name: "GPT-5.5" },
+          { id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
+        ]
+      : [
+          { id: "opus", name: "Opus" },
+          { id: "sonnet", name: "Sonnet" },
+          { id: "haiku", name: "Haiku" },
+        ];
+  }
+
+  override async recent(): Promise<{ agents: Agent[]; projects: RecentProject[]; sessions: RecentSession[] }> {
     return {
+      agents: this.agents,
       projects: ["api-server", "mobile-app", "docs-site", "infra"].map((p, i) => ({ cwd: `~/code/${p}`, project: p, mtime: now() - i * 3_600_000 })),
       sessions: [
         { id: "00000000-0000-4000-8000-000000000010", cwd: "~/code/infra", project: "infra", title: "Rotate the staging certificates", mtime: now() - 26 * 3_600_000 },
-        { id: "00000000-0000-4000-8000-000000000011", cwd: "~/code/api-server", project: "api-server", title: "Add rate limits to the public API", mtime: now() - 50 * 3_600_000 },
+        { id: "00000000-0000-4000-8000-000000000011", agent: "codex", cwd: "~/code/api-server", project: "api-server", title: "Add rate limits to the public API", mtime: now() - 50 * 3_600_000 },
       ],
     };
   }
 
-  override async launch(cwd: string, resume?: string) {
+  override async launch(cwd: string, resume?: string, agent?: Agent) {
     const project = cwd.split("/").pop() || "project";
-    const s = session({ id: `00000000-0000-4000-8000-${String(now()).slice(-12)}`, project, title: resume ? "Resumed session" : null });
+    const codex = agent === "codex";
+    const s = session({ id: `00000000-0000-4000-8000-${String(now()).slice(-12)}`, project, agent: codex ? "codex" : "claude", model: codex ? "gpt-5.5" : "claude-opus-5", title: resume ? "Resumed session" : null });
     this.sessions.set(s.id, s);
     this.items.set(s.id, [item("notice", resume ? "Resumed (demo)" : "New session (demo)")]);
     this.notify();

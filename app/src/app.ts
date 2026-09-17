@@ -6,7 +6,7 @@ import { GLYPH, ago, itemsToLines, shortModel, stateLabel } from "./format.ts";
 import type { Hub } from "./hub.ts";
 import type { Action } from "./input.ts";
 import { padTo, spread, truncate, width, wrap } from "./text.ts";
-import type { SessionSummary } from "./types.ts";
+import type { Agent, ModelChoice, RecentProject, SessionSummary } from "./types.ts";
 
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
@@ -356,12 +356,19 @@ function windowAround<T>(rows: T[], selected: number, size: number): { start: nu
   return { start, rows: rows.slice(start, start + size) };
 }
 
-/** Project name, disambiguated when several sessions share a folder. */
-function sessionName(s: SessionSummary, all: SessionSummary[]): string {
-  const twins = all.filter((o) => o.project === s.project);
-  if (twins.length < 2) return s.project;
-  if (s.tmuxName && s.tmuxName !== s.project) return s.tmuxName;
-  return `${s.project} ${s.id.slice(0, 4)}`;
+const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex" };
+
+function agentOf(s: { agent?: Agent } | undefined): Agent {
+  return s?.agent === "codex" ? "codex" : "claude";
+}
+
+/** Project name, disambiguated when several sessions share a folder; Codex sessions say so when both agents are around. */
+function sessionName(s: SessionSummary, all: SessionSummary[], showAgent: boolean): string {
+  const tag = showAgent && agentOf(s) === "codex" ? " · Codex" : "";
+  const twins = all.filter((o) => o.project === s.project && agentOf(o) === agentOf(s));
+  if (twins.length < 2) return `${s.project}${tag}`;
+  if (s.tmuxName && s.tmuxName !== s.project) return `${s.tmuxName}${tag}`;
+  return `${s.project} ${s.id.slice(0, 4)}${tag}`;
 }
 
 function counts(sessions: SessionSummary[]): string {
@@ -417,7 +424,7 @@ class HomeScreen implements Screen {
         const s = r.s;
         const right = `${stateLabel(s)} · ${ago(s.lastActivity)}`;
         const viewOnly = !s.controllable && s.state !== "ended" ? " (view)" : "";
-        lines.push(spread(`${cur}${GLYPH[s.state]} ${sessionName(s, sessions)}${viewOnly}`, right, BODY_INNER_W));
+        lines.push(spread(`${cur}${GLYPH[s.state]} ${sessionName(s, sessions, this.app.hub.agents.length > 1)}${viewOnly}`, right, BODY_INNER_W));
         lineRows.push(i);
         if (i === this.selected) {
           const detail = s.waiting?.detail || s.activity || s.title || s.summary || "";
@@ -471,16 +478,19 @@ class HomeScreen implements Screen {
 
 // ---------- session transcript ----------
 
-const MENU_SESSION: MenuItem[] = [
-  { id: 1, name: "Interrupt" },
-  { id: 2, name: "Jump to latest" },
-  { id: 3, name: "Use Opus" },
-  { id: 4, name: "Use Sonnet" },
-  { id: 5, name: "Use Fable" },
-  { id: 8, name: "Use Haiku" },
-  { id: 6, name: "Compact" },
-  { id: 7, name: "Refresh" },
-];
+// Model entries take menu ids from 100 up; the glasses menu holds ten items.
+const MODEL_MENU_BASE = 100;
+const MAX_MODEL_ITEMS = 6;
+
+function sessionMenu(models: ModelChoice[]): MenuItem[] {
+  return [
+    { id: 1, name: "Interrupt" },
+    { id: 2, name: "Jump to latest" },
+    ...models.slice(0, MAX_MODEL_ITEMS).map((m, i) => ({ id: MODEL_MENU_BASE + i, name: `Use ${m.name}` })),
+    { id: 6, name: "Compact" },
+    { id: 7, name: "Refresh" },
+  ];
+}
 
 /** Lines moved per swipe. Small steps read as scrolling; a full page reads as a jump. */
 const SCROLL_STEP = 3;
@@ -490,15 +500,28 @@ class SessionScreen implements Screen {
   private cursor = 0;
   private dialogOptions: string[] | null = null;
   private dialogFor = "";
+  private models: ModelChoice[] = [];
 
   constructor(private app: App, private id: string) {}
 
   enter() {
     void this.app.hub.loadItems(this.id).catch((err) => this.app.toast(`! ${err.message}`));
+    void this.app.hub.models(this.id).then((models) => {
+      this.models = models;
+      this.app.render();
+    });
   }
 
   private get session() {
     return this.app.hub.sessions.get(this.id);
+  }
+
+  private get agentName() {
+    return AGENT_NAME[agentOf(this.session)];
+  }
+
+  private viewOnlyHint() {
+    return agentOf(this.session) === "codex" ? "View only: Codex isn't connected to the hub right now" : "View only: not in tmux. Start it with glancecode claude";
   }
 
   /** Working or waiting: worth keeping the WebView awake for. */
@@ -510,7 +533,7 @@ class SessionScreen implements Screen {
   whyNoVoice() {
     const s = this.session;
     if (!s || s.state === "ended") return "This session has ended";
-    if (!s.controllable) return "View only: not in tmux. Start it with glancecode claude";
+    if (!s.controllable) return this.viewOnlyHint();
     if (s.waiting?.kind === "permission") return "Approve or deny first, then hold to talk";
     return "Can't talk to this session";
   }
@@ -555,7 +578,7 @@ class SessionScreen implements Screen {
       lines.push(...wrap(`Allow ${w.tool || "this"}: ${w.detail || ""}`, BODY_INNER_W, "◆ ", "   ").slice(0, 3));
     } else {
       const q = w.questions?.[w.questionIndex || 0];
-      lines.push(...wrap(q?.question || w.detail || "Claude has a question", BODY_INNER_W, "◆ ", "   ").slice(0, 3));
+      lines.push(...wrap(q?.question || w.detail || `${this.agentName} has a question`, BODY_INNER_W, "◆ ", "   ").slice(0, 3));
     }
     opts.forEach((o, i) => lines.push(truncate(`${i === this.cursor ? CURSOR : NO_CURSOR}${o}`, BODY_INNER_W)));
     if (w.kind === "question") lines.push(`${NO_CURSOR}or hold to answer by voice`);
@@ -564,10 +587,11 @@ class SessionScreen implements Screen {
 
   frame(): Frame {
     const s = this.session;
-    if (!s) return { header: "Session closed", body: wrap("This session is no longer running. Double-tap to go back.", BODY_INNER_W), menu: MENU_SESSION };
+    const menu = sessionMenu(this.models);
+    if (!s) return { header: "Session closed", body: wrap("This session is no longer running. Double-tap to go back.", BODY_INNER_W), menu };
     const items = this.app.hub.items.get(this.id);
     if (!items) this.app.hub.ensureItems(this.id); // self-heal if the cache was dropped
-    const transcript = items ? itemsToLines(items, BODY_INNER_W) : ["Loading…"];
+    const transcript = !items ? ["Loading…"] : items.length ? itemsToLines(items, BODY_INNER_W) : s.controllable ? ["Nothing here yet. Hold to talk."] : [];
     const following = this.scroll === 0;
     const waitBlock = following ? this.waitingLines(s) : [];
     const room = BODY_LINES - Math.min(waitBlock.length, BODY_LINES - 2);
@@ -582,7 +606,7 @@ class SessionScreen implements Screen {
     if (this.scroll) rightParts.push(`↑${this.scroll}`);
     if (!following && s.waiting) rightParts.push("◆ tap");
     rightParts.push(s.controllable ? shortModel(s.model) : "view only");
-    return { header: spread(left, rightParts.filter(Boolean).join("  "), HEADER_INNER_W), body, menu: MENU_SESSION };
+    return { header: spread(left, rightParts.filter(Boolean).join("  "), HEADER_INNER_W), body, menu };
   }
 
   async action(a: Action) {
@@ -611,7 +635,7 @@ class SessionScreen implements Screen {
           this.cursor = 0;
           return;
         }
-        this.app.toast(s?.controllable ? "Hold to talk" : "View only: start it with glancecode claude");
+        this.app.toast(s?.controllable ? "Hold to talk" : this.viewOnlyHint());
         return;
       case "doubleTap":
         this.app.pop();
@@ -622,11 +646,15 @@ class SessionScreen implements Screen {
         else if (a.id === 1) {
           await this.app.hub.interrupt(this.id);
           this.app.toast("Interrupted");
-        } else {
-          const cmd = { 3: "/model opus", 4: "/model sonnet", 5: "/model fable", 8: "/model haiku", 6: "/compact" }[a.id];
-          if (cmd) {
-            await this.app.hub.command(this.id, cmd);
-            this.app.toast(`Sent ${cmd}`);
+        } else if (a.id === 6) {
+          await this.app.hub.command(this.id, "/compact");
+          this.app.toast("Compacting");
+        } else if (a.id >= MODEL_MENU_BASE) {
+          const model = this.models[a.id - MODEL_MENU_BASE];
+          if (model) {
+            await this.app.hub.command(this.id, `/model ${model.id}`);
+            // Codex picks the model up with the next prompt; Claude Code switches now.
+            this.app.toast(agentOf(s) === "codex" ? `${model.name} from your next message` : `Switched to ${model.name}`);
           }
         }
         return;
@@ -692,23 +720,42 @@ abstract class Picker implements Screen {
   }
 }
 
+async function startSession(app: App, p: RecentProject, agent: Agent) {
+  app.toast(`Starting ${AGENT_NAME[agent]} in ${p.project}…`, 15000);
+  const { session } = await app.hub.launch(p.cwd, undefined, agent);
+  app.hub.sessions.set(session.id, session);
+  app.toast(`Started ${p.project}. Hold to talk.`);
+  app.replace(new SessionScreen(app, session.id));
+}
+
 class ProjectPicker extends Picker {
   constructor(app: App) {
     super(app, "New session in…");
   }
 
   async load() {
-    const { projects } = await this.app.hub.recent();
+    const { projects, agents } = await this.app.hub.recent();
+    const both = (agents || this.app.hub.agents).includes("codex");
     return projects.map((p) => ({
       label: p.project,
       right: ago(p.mtime),
       run: async () => {
-        this.app.toast(`Starting Claude in ${p.project}…`, 15000);
-        const { session } = await this.app.hub.launch(p.cwd);
-        this.app.hub.sessions.set(session.id, session);
-        this.app.toast(`Started ${p.project}. Hold to talk.`);
-        this.app.replace(new SessionScreen(this.app, session.id));
+        if (both) this.app.replace(new AgentPicker(this.app, p));
+        else await startSession(this.app, p, "claude");
       },
+    }));
+  }
+}
+
+class AgentPicker extends Picker {
+  constructor(app: App, private project: RecentProject) {
+    super(app, `${project.project} with…`);
+  }
+
+  async load() {
+    return (["claude", "codex"] as Agent[]).map((agent) => ({
+      label: agent === "claude" ? "Claude Code" : "Codex",
+      run: () => startSession(this.app, this.project, agent),
     }));
   }
 }
@@ -722,10 +769,10 @@ class ResumePicker extends Picker {
     const { sessions } = await this.app.hub.recent();
     return sessions.map((r) => ({
       label: `${r.project} · ${r.title || "untitled"}`,
-      right: ago(r.mtime),
+      right: `${agentOf(r) === "codex" ? "Codex " : ""}${ago(r.mtime)}`,
       run: async () => {
         this.app.toast(`Resuming ${r.project}…`, 20000);
-        const { session } = await this.app.hub.launch(r.cwd, r.id);
+        const { session } = await this.app.hub.launch(r.cwd, r.id, r.agent);
         this.app.hub.sessions.set(session.id, session);
         this.app.toast(`Resumed ${r.project}`);
         this.app.replace(new SessionScreen(this.app, session.id));
