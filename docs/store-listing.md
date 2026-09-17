@@ -40,7 +40,7 @@ on the glasses, and every screen is available with sample sessions: the session
 list, a working session, an approval (tap to approve), hold to talk, and the menu
 (tap then hold). Double-tap on the session list exits.
 
-**Screenshots:** `docs/screenshots/01-home.png` to `05-menu.png` (576×288, PNG with a
+**Screenshots:** `docs/screenshots/01-home.png` to `06-agents.png` (576×288, PNG with a
 transparent background). Even Hub rejects solid black backgrounds, because the display
 is see-through: black is the part you look through, and the portal previews the
 screenshot over a blurred room photo. To rebuild them from a black-background capture:

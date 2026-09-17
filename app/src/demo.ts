@@ -54,7 +54,7 @@ export class DemoHub extends Hub {
 
   constructor() {
     super({ url: "demo", token: "" });
-    this.agents = ["claude", "codex"];
+    this.agents = ["claude", "codex", "gemini"];
   }
 
   override async connect() {
@@ -80,7 +80,8 @@ export class DemoHub extends Hub {
     });
     const c = session({ id: "00000000-0000-4000-8000-000000000003", project: "docs-site", title: "Rewrite the install guide", lastActivity: now() - 40 * 60_000 });
     const d = session({ id: "00000000-0000-4000-8000-000000000004", agent: "codex", project: "billing", model: "gpt-5.5", title: "Add invoice PDFs", lastActivity: now() - 12 * 60_000 });
-    for (const s of [a, b, c, d]) this.sessions.set(s.id, s);
+    const e = session({ id: "00000000-0000-4000-8000-000000000005", agent: "gemini", project: "landing-page", model: "gemini-3.5-flash", title: "Tighten the hero copy", lastActivity: now() - 25 * 60_000 });
+    for (const s of [a, b, c, d, e]) this.sessions.set(s.id, s);
     this.items.set(a.id, [
       item("user", "The signup test fails about one run in ten on CI. Find out why and fix it.", undefined, 300_000),
       item("assistant", "Looking at the signup flow and its test first.", undefined, 290_000),
@@ -99,6 +100,12 @@ export class DemoHub extends Hub {
       item("tool", "invoices.ts, routes.ts", "Edit", 16 * 60_000),
       item("tool", "npm test", "Shell", 14 * 60_000),
       item("assistant", "Invoices now have a PDF download next to CSV. Tests pass.", undefined, 12 * 60_000),
+    ]);
+    this.items.set(e.id, [
+      item("user", "The hero headline wraps to three lines on phones. Make it fit on two.", undefined, 30 * 60_000),
+      item("tool", "Hero.tsx", "Read", 29 * 60_000),
+      item("tool", "Hero.tsx", "Edit", 27 * 60_000),
+      item("assistant", "The headline is shorter now and fits on two lines at 375px wide.", undefined, 25 * 60_000),
     ]);
     this.items.set(c.id, [
       item("user", "Rewrite the install guide so it starts with the one-line setup.", undefined, 50 * 60_000),
@@ -143,7 +150,7 @@ export class DemoHub extends Hub {
     s.activity = "Thinking";
     this.notify();
     later(() => {
-      this.add(id, item("assistant", "This is the demo, so nothing ran. Pair the app with your own machine to talk to real Claude Code and Codex sessions."));
+      this.add(id, item("assistant", "This is the demo, so nothing ran. Pair the app with your own machine to talk to real Claude Code, Codex and Gemini CLI sessions."));
       s.state = "idle";
       s.activity = "";
       s.lastActivity = now();
@@ -199,7 +206,9 @@ export class DemoHub extends Hub {
   }
 
   override async models(id: string): Promise<ModelChoice[]> {
-    return this.sessions.get(id)?.agent === "codex"
+    const agent = this.sessions.get(id)?.agent;
+    if (agent === "gemini") return []; // Gemini switches models at the computer
+    return agent === "codex"
       ? [
           { id: "gpt-5.5", name: "GPT-5.5" },
           { id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
@@ -224,8 +233,9 @@ export class DemoHub extends Hub {
 
   override async launch(cwd: string, resume?: string, agent?: Agent) {
     const project = cwd.split("/").pop() || "project";
-    const codex = agent === "codex";
-    const s = session({ id: `00000000-0000-4000-8000-${String(now()).slice(-12)}`, project, agent: codex ? "codex" : "claude", model: codex ? "gpt-5.5" : "claude-opus-5", title: resume ? "Resumed session" : null });
+    const picked: Agent = agent === "codex" || agent === "gemini" ? agent : "claude";
+    const model = { claude: "claude-opus-5", codex: "gpt-5.5", gemini: "gemini-3.5-flash" }[picked];
+    const s = session({ id: `00000000-0000-4000-8000-${String(now()).slice(-12)}`, project, agent: picked, model, title: resume ? "Resumed session" : null });
     this.sessions.set(s.id, s);
     this.items.set(s.id, [item("notice", resume ? "Resumed (demo)" : "New session (demo)")]);
     this.notify();

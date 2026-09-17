@@ -364,9 +364,9 @@ function agentOf(s: { agent?: Agent } | undefined): Agent {
   return s?.agent === "codex" || s?.agent === "gemini" ? s.agent : "claude";
 }
 
-/** Project name, disambiguated when several sessions share a folder; non-Claude sessions say which agent when several are around. */
+/** Project name, disambiguated when several sessions share a folder; every session names its agent when the hub runs more than one. */
 function sessionName(s: SessionSummary, all: SessionSummary[], showAgent: boolean): string {
-  const tag = showAgent && agentOf(s) !== "claude" ? ` · ${AGENT_NAME[agentOf(s)]}` : "";
+  const tag = showAgent ? ` · ${AGENT_NAME[agentOf(s)]}` : "";
   const twins = all.filter((o) => o.project === s.project && agentOf(o) === agentOf(s));
   if (twins.length < 2) return `${s.project}${tag}`;
   if (s.tmuxName && s.tmuxName !== s.project) return `${s.tmuxName}${tag}`;
@@ -769,10 +769,11 @@ class ResumePicker extends Picker {
   }
 
   async load() {
-    const { sessions } = await this.app.hub.recent();
+    const { sessions, agents } = await this.app.hub.recent();
+    const showAgent = (agents?.length ? agents : this.app.hub.agents).length > 1;
     return sessions.map((r) => ({
       label: `${r.project} · ${r.title || "untitled"}`,
-      right: `${agentOf(r) === "claude" ? "" : `${AGENT_NAME[agentOf(r)]} `}${ago(r.mtime)}`,
+      right: `${showAgent ? `${AGENT_NAME[agentOf(r)]} ` : ""}${ago(r.mtime)}`,
       run: async () => {
         this.app.toast(`Resuming ${r.project}…`, 20000);
         const { session } = await this.app.hub.launch(r.cwd, r.id, r.agent);
