@@ -1,8 +1,8 @@
 # GlanceCode
 
-Drive your Claude Code and Codex sessions from Even Realities G2 glasses. See the
-live transcript, approve tool calls, answer questions, and hold to talk. Everything
-runs on your own computer.
+Drive your Claude Code, Codex and Gemini CLI sessions from Even Realities G2
+glasses. See the live transcript, approve tool calls, answer questions, and hold to
+talk. Everything runs on your own computer.
 
 <p>
   <img src="docs/screenshots/01-home.png" width="288" alt="Session list on the glasses">
@@ -10,7 +10,7 @@ runs on your own computer.
 </p>
 
 GlanceCode is an independent project. It isn't affiliated with or endorsed by
-Anthropic, OpenAI or Even Realities.
+Anthropic, OpenAI, Google or Even Realities.
 
 ## How it works
 
@@ -31,6 +31,9 @@ background tasks, Remote Control and `tmux attach` at your desk keep working.
 There's only ever one Claude process per session, and the phone, the terminal and
 the glasses all see the same conversation.
 
+Gemini CLI works the same way. Its hooks and session files are close to Claude
+Code's, so Gemini sessions run inside tmux and the hub follows them the same way.
+
 Codex works differently, and more directly. Codex runs an app server that its
 terminal UI talks to, and the hub joins that server as one more client. Prompts,
 approvals and answers go through Codex's own protocol, so nothing is typed into a
@@ -42,16 +45,17 @@ codex (terminal) ──▶ Codex app server ◀── hub ◀── tailscale se
 
 ## What you get on the glasses
 
-- A list of every Claude Code and Codex session on your computer, with live state:
-  working, idle, or waiting for you.
+- A list of every Claude Code, Codex and Gemini CLI session on your computer, with
+  live state: working, idle, or waiting for you.
 - The live transcript of any session: prompts, replies, progress notes and tool
   calls, pixel-wrapped for the G2 display.
 - Approvals and questions with the exact options the session is offering. For
   Claude Code, keys are only pressed after that dialog is read back from the
-  terminal. For Codex, the answer goes straight to Codex.
+  terminal (the same goes for Gemini CLI). For Codex, the answer goes straight to
+  Codex.
 - Hold to talk. Words appear while you speak. Release to review, then tap to send.
-- Start a new session in a recent project with either agent, or resume a past
-  session.
+- Start a new session in a recent project with any installed agent, or resume a
+  past session.
 - A menu to interrupt, compact, or switch the session's model without changing
   your default.
 
@@ -60,9 +64,11 @@ codex (terminal) ──▶ Codex app server ◀── hub ◀── tailscale se
 On your computer (macOS or Linux):
 
 - Node 20 or newer
-- [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex),
-  or both, signed in. Codex support needs the Codex CLI
-  (`npm install -g @openai/codex`) and turns on by itself when the hub finds it.
+- At least one of [Claude Code](https://claude.com/claude-code),
+  [Codex](https://github.com/openai/codex) or
+  [Gemini CLI](https://github.com/google-gemini/gemini-cli), signed in. Codex
+  (`npm install -g @openai/codex`) and Gemini CLI (`npm install -g @google/gemini-cli`)
+  support turn on by themselves when the hub finds them.
 - tmux
 - [Tailscale](https://tailscale.com), signed in, with HTTPS certificates turned on
   for your tailnet at [login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)
@@ -94,7 +100,8 @@ npm install -g @sousy/glancecode
 glancecode setup
 ```
 
-`setup` checks the requirements, adds the Claude Code hook, downloads the speech
+`setup` checks the requirements, adds the Claude Code hook (and Gemini CLI's, if
+it's installed), downloads the speech
 model, starts the hub as a background service, serves it over HTTPS on your
 `*.ts.net` name, and prints a pairing code.
 
@@ -110,6 +117,16 @@ alias claude='glancecode claude'   # optional, in your shell rc
 ```
 
 Sessions started any other way still appear on the glasses, marked view only.
+
+Gemini CLI is the same:
+
+```bash
+glancecode gemini          # takes the same arguments as gemini
+alias gemini='glancecode gemini'   # optional
+```
+
+If you install Gemini CLI after running setup, run `glancecode install` once so it
+gets the hook.
 
 For Codex, start sessions through the hub's Codex server so the glasses can join
 them:
@@ -178,6 +195,9 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability and
 | `preventSleep` | true | macOS: keep the Mac awake while plugged in, so the glasses can reach it |
 | `codex` | `"auto"` | follow Codex sessions when the Codex CLI is installed; `false` turns it off |
 | `codexBin` | `codex` | the Codex command, or a full path to it |
+| `gemini` | `"auto"` | follow Gemini CLI sessions when it's installed; `false` turns it off |
+| `geminiBin` | `gemini` | the Gemini CLI command, or a full path to it |
+| `geminiArgs` | `[]` | extra arguments for Gemini sessions started from the glasses |
 | `defaultAgent` | `claude` | what New session starts on glasses app versions that don't ask |
 
 ## Limitations
@@ -186,7 +206,10 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability and
   session while another app is open, set `ntfyTopic`. The Even app mirrors phone
   notifications to the glasses.
 - The G2 display has one font weight, so markdown is shown as plain text.
-- Claude Code sessions must run inside tmux for the glasses to type into them.
+- Claude Code and Gemini CLI sessions must run inside tmux for the glasses to type
+  into them.
+- Gemini CLI's model can't be switched from the glasses; its model picker is
+  interactive, so use `/model` at the computer.
 - Codex sessions must be started with `glancecode codex` to show up live.
 - Switching a Codex session's model from the glasses applies from the next message
   you send from the glasses.

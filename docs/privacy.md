@@ -8,7 +8,7 @@ both.
 
 ## What the app handles
 
-- **Session content.** The app shows your Claude Code and Codex sessions: prompts, replies,
+- **Session content.** The app shows your Claude Code, Codex and Gemini CLI sessions: prompts, replies,
   tool calls and status. It fetches them from the hub on your computer and keeps
   them in memory only while the app is open.
 - **Voice.** When you hold to talk, audio from the glasses microphone is sent to
@@ -23,9 +23,9 @@ The app connects only to the hub address you paired with, over your own Tailscal
 network. GlanceCode has no servers, accounts, analytics or tracking, and the
 developer never receives your data.
 
-The hub works with Claude Code and Codex on your computer. What Claude Code sends
-to Anthropic, and what Codex sends to OpenAI, is covered by your agreement with
-each of them, not by this policy.
+The hub works with Claude Code, Codex and Gemini CLI on your computer. What they
+send to Anthropic, OpenAI and Google is covered by your agreement with each of
+them, not by this policy.
 
 If you turn on the optional phone notifications (`ntfyTopic`), the hub sends the
 project name and a short status line to the ntfy server you configure.

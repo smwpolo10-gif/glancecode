@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 (glasses app 0.3.1)
+
+- Gemini CLI support. `glancecode install` adds the hook to Gemini CLI's settings,
+  and `glancecode gemini` starts it in tmux. Gemini sessions get the live
+  transcript, approvals, hold to talk, interrupt, compact, and new or resumed
+  sessions from the glasses.
+- The glasses app offers every installed agent when starting a session, and shows
+  Gemini's model names.
+- Fixed: a session started from the glasses could be matched to another tmux
+  server's session, since pane ids repeat across servers.
+- Fixed: a session whose tmux pane has gone now ends even if its process lingers.
+- Fixed: a transcript replaced by a rewritten file is read again from the start.
+
 ## 0.5.0 (glasses app 0.3.0)
 
 - Codex support. The hub joins Codex's app server as one more client, so Codex

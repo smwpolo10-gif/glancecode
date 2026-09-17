@@ -1,7 +1,7 @@
 # Security
 
-GlanceCode lets a paired phone drive Claude Code and Codex sessions on your
-computer, so security issues matter here. Please report them privately.
+GlanceCode lets a paired phone drive Claude Code, Codex and Gemini CLI sessions on
+your computer, so security issues matter here. Please report them privately.
 
 ## Reporting a vulnerability
 
@@ -20,8 +20,11 @@ Don't open a public issue for a security problem.
   is never bundled into the glasses app.
 - The Claude Code hook posts to a separate port on 127.0.0.1 that is never served
   over Tailscale.
-- Keys are only sent to a Claude Code session after the matching dialog is read
-  back from the terminal, and prompts are refused while a permission dialog is open.
+- Keys are only sent to a Claude Code or Gemini CLI session after the matching
+  dialog is read back from the terminal, and prompts are refused while a permission
+  dialog is open.
+- Gemini CLI runs hooks while it waits, so the hook is registered with a 5 second
+  timeout and exits without output even when the hub isn't running.
 - The Codex app server listens on a unix socket in `~/.config/glancecode`, created
   owner-only, and never on a network port. The hub answers only the Codex requests
   the glasses can show: command, file change and permission approvals, and
@@ -31,6 +34,6 @@ Don't open a public issue for a security problem.
 
 - Anyone who already has the pairing token and access to your tailnet. That is
   the trust boundary by design.
-- Claude Code's and Codex's own permission systems, which GlanceCode doesn't change.
+- The agents' own permission systems, which GlanceCode doesn't change.
 - Other programs running as your user account. They can already run Codex and
-  Claude Code directly.
+  the agents directly.
