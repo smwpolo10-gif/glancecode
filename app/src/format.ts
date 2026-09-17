@@ -21,6 +21,8 @@ export function stateLabel(s: SessionSummary): string {
 export function shortModel(model: string | null): string {
   if (!model) return "";
   if (/^gpt-/i.test(model)) return model.replace(/^gpt/i, "GPT");
+  // gemini-3.5-flash -> Gemini 3.5 Flash
+  if (/^gemini-/i.test(model)) return model.split("-").map((w) => (/^\d/.test(w) ? w : w[0].toUpperCase() + w.slice(1))).join(" ");
   const m = /(opus|sonnet|haiku|fable)[-_]?(\d+(?:[-.]\d+)?)?/i.exec(model);
   if (!m) return model;
   const name = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();

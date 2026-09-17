@@ -3,7 +3,7 @@
 export type State = "starting" | "working" | "idle" | "waiting" | "ended";
 
 /** Which coding agent a session runs. Hubs before Codex support leave it out. */
-export type Agent = "claude" | "codex";
+export type Agent = "claude" | "codex" | "gemini";
 
 export interface Waiting {
   kind: "permission" | "question";

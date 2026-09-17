@@ -356,15 +356,17 @@ function windowAround<T>(rows: T[], selected: number, size: number): { start: nu
   return { start, rows: rows.slice(start, start + size) };
 }
 
-const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex" };
+const AGENT_NAME: Record<Agent, string> = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
+/** What the picker calls each agent. */
+const AGENT_PRODUCT: Record<Agent, string> = { claude: "Claude Code", codex: "Codex", gemini: "Gemini CLI" };
 
 function agentOf(s: { agent?: Agent } | undefined): Agent {
-  return s?.agent === "codex" ? "codex" : "claude";
+  return s?.agent === "codex" || s?.agent === "gemini" ? s.agent : "claude";
 }
 
-/** Project name, disambiguated when several sessions share a folder; Codex sessions say so when both agents are around. */
+/** Project name, disambiguated when several sessions share a folder; non-Claude sessions say which agent when several are around. */
 function sessionName(s: SessionSummary, all: SessionSummary[], showAgent: boolean): string {
-  const tag = showAgent && agentOf(s) === "codex" ? " · Codex" : "";
+  const tag = showAgent && agentOf(s) !== "claude" ? ` · ${AGENT_NAME[agentOf(s)]}` : "";
   const twins = all.filter((o) => o.project === s.project && agentOf(o) === agentOf(s));
   if (twins.length < 2) return `${s.project}${tag}`;
   if (s.tmuxName && s.tmuxName !== s.project) return `${s.tmuxName}${tag}`;
@@ -521,7 +523,8 @@ class SessionScreen implements Screen {
   }
 
   private viewOnlyHint() {
-    return agentOf(this.session) === "codex" ? "View only: Codex isn't connected to the hub right now" : "View only: not in tmux. Start it with glancecode claude";
+    const agent = agentOf(this.session);
+    return agent === "codex" ? "View only: Codex isn't connected to the hub right now" : `View only: not in tmux. Start it with glancecode ${agent}`;
   }
 
   /** Working or waiting: worth keeping the WebView awake for. */
@@ -735,26 +738,26 @@ class ProjectPicker extends Picker {
 
   async load() {
     const { projects, agents } = await this.app.hub.recent();
-    const both = (agents || this.app.hub.agents).includes("codex");
+    const available = agents?.length ? agents : this.app.hub.agents;
     return projects.map((p) => ({
       label: p.project,
       right: ago(p.mtime),
       run: async () => {
-        if (both) this.app.replace(new AgentPicker(this.app, p));
-        else await startSession(this.app, p, "claude");
+        if (available.length > 1) this.app.replace(new AgentPicker(this.app, p, available));
+        else await startSession(this.app, p, available[0] || "claude");
       },
     }));
   }
 }
 
 class AgentPicker extends Picker {
-  constructor(app: App, private project: RecentProject) {
+  constructor(app: App, private project: RecentProject, private agents: Agent[]) {
     super(app, `${project.project} with…`);
   }
 
   async load() {
-    return (["claude", "codex"] as Agent[]).map((agent) => ({
-      label: agent === "claude" ? "Claude Code" : "Codex",
+    return this.agents.map((agent) => ({
+      label: AGENT_PRODUCT[agent] || agent,
       run: () => startSession(this.app, this.project, agent),
     }));
   }
@@ -769,7 +772,7 @@ class ResumePicker extends Picker {
     const { sessions } = await this.app.hub.recent();
     return sessions.map((r) => ({
       label: `${r.project} · ${r.title || "untitled"}`,
-      right: `${agentOf(r) === "codex" ? "Codex " : ""}${ago(r.mtime)}`,
+      right: `${agentOf(r) === "claude" ? "" : `${AGENT_NAME[agentOf(r)]} `}${ago(r.mtime)}`,
       run: async () => {
         this.app.toast(`Resuming ${r.project}…`, 20000);
         const { session } = await this.app.hub.launch(r.cwd, r.id, r.agent);
