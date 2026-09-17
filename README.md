@@ -1,8 +1,8 @@
 # GlanceCode
 
-Drive your Claude Code sessions from Even Realities G2 glasses. See the live
-transcript, approve tool calls, answer Claude's questions, and hold to talk.
-Everything runs on your own computer.
+Drive your Claude Code and Codex sessions from Even Realities G2 glasses. See the
+live transcript, approve tool calls, answer questions, and hold to talk. Everything
+runs on your own computer.
 
 <p>
   <img src="docs/screenshots/01-home.png" width="288" alt="Session list on the glasses">
@@ -10,7 +10,7 @@ Everything runs on your own computer.
 </p>
 
 GlanceCode is an independent project. It isn't affiliated with or endorsed by
-Anthropic or Even Realities.
+Anthropic, OpenAI or Even Realities.
 
 ## How it works
 
@@ -31,16 +31,27 @@ background tasks, Remote Control and `tmux attach` at your desk keep working.
 There's only ever one Claude process per session, and the phone, the terminal and
 the glasses all see the same conversation.
 
+Codex works differently, and more directly. Codex runs an app server that its
+terminal UI talks to, and the hub joins that server as one more client. Prompts,
+approvals and answers go through Codex's own protocol, so nothing is typed into a
+terminal and the terminal shows whatever the glasses do as it happens.
+
+```
+codex (terminal) ──▶ Codex app server ◀── hub ◀── tailscale serve ◀── Even app ◀── G2
+```
+
 ## What you get on the glasses
 
-- A list of every Claude Code session on your computer, with live state: working,
-  idle, or waiting for you.
+- A list of every Claude Code and Codex session on your computer, with live state:
+  working, idle, or waiting for you.
 - The live transcript of any session: prompts, replies, progress notes and tool
   calls, pixel-wrapped for the G2 display.
-- Approvals and questions with the exact options Claude Code is showing. Keys are
-  only pressed after that dialog is read back from the terminal.
+- Approvals and questions with the exact options the session is offering. For
+  Claude Code, keys are only pressed after that dialog is read back from the
+  terminal. For Codex, the answer goes straight to Codex.
 - Hold to talk. Words appear while you speak. Release to review, then tap to send.
-- Start a new session in a recent project, or resume a past session.
+- Start a new session in a recent project with either agent, or resume a past
+  session.
 - A menu to interrupt, compact, or switch the session's model without changing
   your default.
 
@@ -49,7 +60,9 @@ the glasses all see the same conversation.
 On your computer (macOS or Linux):
 
 - Node 20 or newer
-- [Claude Code](https://claude.com/claude-code), signed in
+- [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex),
+  or both, signed in. Codex support needs the Codex CLI
+  (`npm install -g @openai/codex`) and turns on by itself when the hub finds it.
 - tmux
 - [Tailscale](https://tailscale.com), signed in, with HTTPS certificates turned on
   for your tailnet at [login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)
@@ -98,6 +111,18 @@ alias claude='glancecode claude'   # optional, in your shell rc
 
 Sessions started any other way still appear on the glasses, marked view only.
 
+For Codex, start sessions through the hub's Codex server so the glasses can join
+them:
+
+```bash
+glancecode codex           # takes the same arguments as codex, including resume
+alias codex='glancecode codex'     # optional, in your shell rc
+```
+
+Plain `codex`, the Codex IDE extension and the Codex desktop app each run a
+private server that other programs can't join, so their sessions don't show up
+live. Past sessions from all of them do appear under Resume on the glasses.
+
 ## Using it
 
 | Gesture | Session list | Session |
@@ -130,6 +155,8 @@ the glasses can still reach it.
   the `token` line in `~/.config/glancecode/config.json` and run
   `glancecode service restart`.
 - The hook port accepts connections from 127.0.0.1 only.
+- The Codex app server listens on a unix socket in `~/.config/glancecode`, which
+  only your user account can open. It never listens on the network.
 - Voice is transcribed on your computer. Audio isn't sent anywhere else.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability and
@@ -149,13 +176,20 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability and
 | `ntfyTopic` | empty | optional phone push through ntfy when a session finishes or needs you |
 | `bindTailscaleIP` | false | also listen on the raw Tailscale IP over plain HTTP, for development |
 | `preventSleep` | true | macOS: keep the Mac awake while plugged in, so the glasses can reach it |
+| `codex` | `"auto"` | follow Codex sessions when the Codex CLI is installed; `false` turns it off |
+| `codexBin` | `codex` | the Codex command, or a full path to it |
+| `defaultAgent` | `claude` | what New session starts on glasses app versions that don't ask |
+
 ## Limitations
 
 - Even Hub apps only run while they're open on the glasses. To hear about a
   session while another app is open, set `ntfyTopic`. The Even app mirrors phone
   notifications to the glasses.
 - The G2 display has one font weight, so markdown is shown as plain text.
-- Sessions must run inside tmux for the glasses to type into them.
+- Claude Code sessions must run inside tmux for the glasses to type into them.
+- Codex sessions must be started with `glancecode codex` to show up live.
+- Switching a Codex session's model from the glasses applies from the next message
+  you send from the glasses.
 
 ## Development
 

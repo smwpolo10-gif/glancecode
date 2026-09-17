@@ -5,17 +5,17 @@ Text and assets for the Even Hub submission.
 **Name** (20 characters max): GlanceCode
 
 **Short description:**
-Your Claude Code sessions on your glasses. Watch progress, approve, and talk back.
+Your Claude Code and Codex sessions on your glasses. Watch progress, approve, and talk back.
 
 **Description:**
 
-GlanceCode shows the Claude Code sessions running on your computer and lets you work with them from your G2, without hijacking the session.
+GlanceCode shows the Claude Code and Codex sessions running on your computer and lets you work with them from your G2, without hijacking the session.
 
 - See every session and whether it's working, idle or waiting for you.
 - Read the live transcript: replies, progress and tool calls.
-- Approve or deny a tool call, or pick an answer to Claude's question.
+- Approve or deny a tool call, or pick an answer to a question.
 - Hold to talk. Your words appear as you speak, and a tap sends them.
-- Start a session in a recent project or resume an earlier one.
+- Start a Claude Code or Codex session in a recent project, or resume an earlier one.
 - Interrupt a session, compact it, or switch its model from the menu.
 - Keep working in the same session from your glasses, your computer and the Claude app's remote connection at the same time. Nothing is copied or split, so you can switch devices whenever you like.
 
@@ -23,7 +23,7 @@ GlanceCode needs the free glancecode hub running on your Mac or Linux computer, 
 
 Not paired yet? Tap on the glasses to try a demo with sample sessions.
 
-GlanceCode is an independent project and isn't affiliated with Anthropic.
+GlanceCode is an independent project and isn't affiliated with Anthropic or OpenAI.
 
 Visit the project at:
 - GitHub: https://github.com/sousyllc/glancecode

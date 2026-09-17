@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 (glasses app 0.3.0)
+
+- Codex support. The hub joins Codex's app server as one more client, so Codex
+  sessions show on the glasses with their live transcript, approvals, questions,
+  hold to talk, interrupt, compact and model switching, while the terminal shows
+  the same thing.
+- `glancecode codex` starts Codex attached to that server, like `glancecode claude`.
+- New session on the glasses asks whether to start Claude Code or Codex, and Resume
+  lists past sessions from both, including ones from the Codex desktop app.
+- The session menu lists the models the session's agent offers.
+- A new, empty session says to hold to talk instead of showing a blank screen.
+
 ## 0.4.1
 
 - The hub keeps a plugged-in Mac awake, so a sleeping machine no longer looks

@@ -1,7 +1,7 @@
 # Security
 
-GlanceCode lets a paired phone type into Claude Code sessions on your computer, so
-security issues matter here. Please report them privately.
+GlanceCode lets a paired phone drive Claude Code and Codex sessions on your
+computer, so security issues matter here. Please report them privately.
 
 ## Reporting a vulnerability
 
@@ -20,11 +20,17 @@ Don't open a public issue for a security problem.
   is never bundled into the glasses app.
 - The Claude Code hook posts to a separate port on 127.0.0.1 that is never served
   over Tailscale.
-- Keys are only sent to a session after the matching dialog is read back from the
-  terminal, and prompts are refused while a permission dialog is open.
+- Keys are only sent to a Claude Code session after the matching dialog is read
+  back from the terminal, and prompts are refused while a permission dialog is open.
+- The Codex app server listens on a unix socket in `~/.config/glancecode`, created
+  owner-only, and never on a network port. The hub answers only the Codex requests
+  the glasses can show: command, file change and permission approvals, and
+  questions. Anything else stays with the Codex terminal.
 
 ## Out of scope
 
 - Anyone who already has the pairing token and access to your tailnet. That is
   the trust boundary by design.
-- Claude Code's own permission system, which GlanceCode doesn't change.
+- Claude Code's and Codex's own permission systems, which GlanceCode doesn't change.
+- Other programs running as your user account. They can already run Codex and
+  Claude Code directly.
