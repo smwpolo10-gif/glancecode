@@ -10,6 +10,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { BRAND } = await import(join(ROOT, "hub", "brand.mjs"));
 const { CODEX_SOCKET, CONFIG_DIR, loadConfig, tailscaleAddress } = await import(join(ROOT, "hub", "config.mjs"));
 const { serverArgs, loginShellCommand } = await import(join(ROOT, "hub", "tmux.mjs"));
+const { GEMINI_HOOK_EVENTS, GEMINI_SETTINGS } = await import(join(ROOT, "hub", "gemini.mjs"));
+const { findCodex } = await import(join(ROOT, "hub", "codex.mjs"));
 const PKG = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
 const CLI = BRAND.name;
@@ -63,6 +65,16 @@ const commands = {
     const settings = readSettings();
     const hooked = HOOK_EVENTS.every((e) => (settings.hooks?.[e] || []).some((g) => (g.hooks || []).some((h) => h.command === HOOK_SCRIPT)));
     hooked ? ok("Claude Code hooks installed") : warn(`hooks not installed: ${CLI} install`);
+    if (geminiInstalled()) {
+      let gemini = {};
+      try {
+        gemini = readSettings(GEMINI_SETTINGS);
+      } catch {
+        /* reported below as not installed */
+      }
+      const geminiHooked = GEMINI_HOOK_EVENTS.every((e) => (gemini.hooks?.[e] || []).some((g) => (g.hooks || []).some((h) => h.command === HOOK_SCRIPT)));
+      geminiHooked ? ok("Gemini CLI hooks installed") : warn(`Gemini CLI found but its hooks aren't installed: ${CLI} install`);
+    }
     const stale = staleHookCommands(settings);
     if (stale.length) warn(`hooks point at missing scripts: ${[...new Set(stale)].join(", ")} (run ${CLI} install)`);
     try {
@@ -107,42 +119,31 @@ const commands = {
 
   // ---------- Claude Code hooks ----------
   install({ quiet = false } = {}) {
-    const settings = readSettings();
-    settings.hooks ||= {};
-    let added = 0;
-    let removed = 0;
-    for (const event of HOOK_EVENTS) {
-      const groups = (settings.hooks[event] ||= []);
-      // Drop entries from earlier installs of this tool (moved folder, old name).
-      for (const g of groups) {
-        const before = (g.hooks || []).length;
-        g.hooks = (g.hooks || []).filter((h) => !isOurHook(h.command) || h.command === HOOK_SCRIPT);
-        removed += before - g.hooks.length;
-      }
-      settings.hooks[event] = groups.filter((g) => (g.hooks || []).length);
-      if (!settings.hooks[event].some((g) => g.hooks.some((h) => h.command === HOOK_SCRIPT))) {
-        settings.hooks[event].push({ hooks: [{ type: "command", command: HOOK_SCRIPT, async: true }] });
-        added++;
+    const claude = addHooks(SETTINGS, HOOK_EVENTS, { type: "command", command: HOOK_SCRIPT, async: true });
+    if (claude.added || claude.removed) ok(`hook installed on ${claude.added} event(s)${claude.removed ? `, ${claude.removed} old entr${claude.removed === 1 ? "y" : "ies"} removed` : ""} in ${SETTINGS}`);
+    else ok("Claude Code hooks already installed");
+    // Gemini CLI reads nearly the same hook format. Its hooks run while Gemini waits, so
+    // they get a short timeout; the script itself returns in milliseconds.
+    if (geminiInstalled()) {
+      try {
+        const gemini = addHooks(GEMINI_SETTINGS, GEMINI_HOOK_EVENTS, { type: "command", command: HOOK_SCRIPT, name: CLI, timeout: 5000 });
+        gemini.added || gemini.removed ? ok(`Gemini CLI hook installed on ${gemini.added} event(s) in ${GEMINI_SETTINGS}`) : ok("Gemini CLI hooks already installed");
+      } catch (err) {
+        warn(`couldn't update ${GEMINI_SETTINGS}: ${err.message}`);
       }
     }
-    writeSettings(settings);
-    if (added || removed) ok(`hook installed on ${added} event(s)${removed ? `, ${removed} old entr${removed === 1 ? "y" : "ies"} removed` : ""} in ${SETTINGS}`);
-    else ok("hooks already installed");
     if (!quiet) info("Sessions already open pick it up when their settings reload; restart them if they don't appear.");
   },
 
   uninstall() {
-    const settings = readSettings();
-    let removed = 0;
-    for (const [event, groups] of Object.entries(settings.hooks || {})) {
-      const kept = groups
-        .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurHook(h.command)) }))
-        .filter((g) => g.hooks.length);
-      removed += groups.reduce((n, g) => n + (g.hooks || []).length, 0) - kept.reduce((n, g) => n + g.hooks.length, 0);
-      if (kept.length) settings.hooks[event] = kept;
-      else delete settings.hooks[event];
+    let removed = removeHooks(SETTINGS);
+    if (existsSync(GEMINI_SETTINGS)) {
+      try {
+        removed += removeHooks(GEMINI_SETTINGS);
+      } catch (err) {
+        warn(`couldn't update ${GEMINI_SETTINGS}: ${err.message}`);
+      }
     }
-    writeSettings(settings);
     console.log(`Removed ${removed} ${CLI} hook entr${removed === 1 ? "y" : "ies"}.`);
   },
 
@@ -181,6 +182,23 @@ const commands = {
     const cwd = process.cwd();
     const name = uniqueName(basename(cwd));
     const r = spawnSync("tmux", [...serverArgs(null), "new-session", "-s", name, "-c", cwd, "--", ...loginShellCommand(bin, args)], { stdio: "inherit" });
+    process.exit(r.status ?? 0);
+  },
+
+  gemini() {
+    const cfg = loadConfig();
+    const real = findCodex(cfg.geminiBin, { exclude: [ROOT] });
+    if (!real) {
+      console.error("gemini not found on PATH. Install it with: npm install -g @google/gemini-cli");
+      process.exit(1);
+    }
+    if (process.env.TMUX) {
+      const r = spawnSync(real, rest, { stdio: "inherit" });
+      process.exit(r.status ?? 0);
+    }
+    const cwd = process.cwd();
+    const name = uniqueName(basename(cwd));
+    const r = spawnSync("tmux", [...serverArgs(null), "new-session", "-s", name, "-c", cwd, "--", ...loginShellCommand(real, rest)], { stdio: "inherit" });
     process.exit(r.status ?? 0);
   },
 
@@ -358,6 +376,7 @@ Setup
 Sessions
   ${CLI} claude [args]      start Claude Code inside tmux so the glasses can drive it
   ${CLI} codex [args]       start Codex attached to the hub's Codex server
+  ${CLI} gemini [args]      start Gemini CLI inside tmux so the glasses can drive it
   ${CLI} attach [name]      open a running session in this terminal
   ${CLI} ls                 list sessions
   ${CLI} feed               live feed of every session
@@ -560,17 +579,57 @@ function staleHookCommands(settings) {
   return out;
 }
 
-function readSettings() {
-  if (!existsSync(SETTINGS)) return {};
-  return JSON.parse(readFileSync(SETTINGS, "utf8"));
+function readSettings(path = SETTINGS) {
+  if (!existsSync(path)) return {};
+  return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function writeSettings(settings) {
-  mkdirSync(dirname(SETTINGS), { recursive: true });
-  if (existsSync(SETTINGS)) copyFileSync(SETTINGS, `${SETTINGS}.bak-${CLI}`);
-  const tmp = SETTINGS + ".tmp";
+function writeSettings(settings, path = SETTINGS) {
+  mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) copyFileSync(path, `${path}.bak-${CLI}`);
+  const tmp = path + ".tmp";
   writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
-  renameSync(tmp, SETTINGS);
+  renameSync(tmp, path);
+}
+
+/** Put our hook on each event in a settings file, dropping entries from older installs. */
+function addHooks(path, events, entry) {
+  const settings = readSettings(path);
+  settings.hooks ||= {};
+  let added = 0;
+  let removed = 0;
+  for (const event of events) {
+    const groups = (settings.hooks[event] ||= []);
+    for (const g of groups) {
+      const before = (g.hooks || []).length;
+      g.hooks = (g.hooks || []).filter((h) => !isOurHook(h.command) || h.command === HOOK_SCRIPT);
+      removed += before - g.hooks.length;
+    }
+    settings.hooks[event] = groups.filter((g) => (g.hooks || []).length);
+    if (!settings.hooks[event].some((g) => g.hooks.some((h) => h.command === HOOK_SCRIPT))) {
+      settings.hooks[event].push({ hooks: [entry] });
+      added++;
+    }
+  }
+  if (added || removed) writeSettings(settings, path);
+  return { added, removed };
+}
+
+function removeHooks(path) {
+  const settings = readSettings(path);
+  let removed = 0;
+  for (const [event, groups] of Object.entries(settings.hooks || {})) {
+    const kept = groups.map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurHook(h.command)) })).filter((g) => g.hooks.length);
+    removed += groups.reduce((n, g) => n + (g.hooks || []).length, 0) - kept.reduce((n, g) => n + g.hooks.length, 0);
+    if (kept.length) settings.hooks[event] = kept;
+    else delete settings.hooks[event];
+  }
+  if (removed) writeSettings(settings, path);
+  return removed;
+}
+
+function geminiInstalled() {
+  return existsSync(dirname(GEMINI_SETTINGS)) || !!findCodex(loadConfig().geminiBin, { exclude: [ROOT] });
 }
 
 function findRealClaude() {

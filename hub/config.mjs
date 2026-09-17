@@ -42,7 +42,12 @@ const DEFAULTS = {
   // Codex CLI sessions: "auto" follows them when the codex command is installed.
   codex: "auto",
   codexBin: "codex",
-  // What "New session" starts from a glasses app that doesn't ask ("claude" or "codex").
+  // Gemini CLI sessions: "auto" follows them when the gemini command is installed.
+  gemini: "auto",
+  geminiBin: "gemini",
+  // Extra arguments for Gemini sessions the glasses start.
+  geminiArgs: [],
+  // What "New session" starts from a glasses app that doesn't ask ("claude", "codex" or "gemini").
   defaultAgent: "claude",
 };
 

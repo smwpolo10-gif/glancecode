@@ -1,12 +1,28 @@
 // tmux control: find panes, type into Claude Code, read the screen, launch sessions.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { TMUX_CONF, TMUX_SOCKET_NAME } from "./config.mjs";
+import { readGeminiDialog } from "./gemini.mjs";
 
 const run = promisify(execFile);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Pane ids like %0 restart on every tmux server, so a pane is only identified by its
+ * server's socket plus its id. Sockets are compared by real path (/tmp is a link on macOS).
+ */
+export function paneKey(target) {
+  if (!target?.pane || !target?.socket) return null;
+  let socket = target.socket;
+  try {
+    socket = realpathSync(socket);
+  } catch {
+    /* socket gone; compare as given */
+  }
+  return `${socket}|${target.pane}`;
+}
 
 /** `$TMUX` is "socketPath,serverPid,sessionIndex". */
 export function socketFromTmuxEnv(tmuxEnv) {
@@ -85,10 +101,12 @@ export async function capture(target, lines = 60) {
 }
 
 /**
- * What is Claude Code showing at the bottom of the pane?
+ * What is the agent showing at the bottom of the pane?
+ * @param {"claude"|"gemini"} [agent]
  * @returns {{kind: "permission"|"question"|"trust"|"input"|"unknown", options: string[]}}
  */
-export function readDialog(screen) {
+export function readDialog(screen, agent = "claude") {
+  if (agent === "gemini") return readGeminiDialog(screen);
   const tail = screen.split("\n").filter((l) => l.trim()).slice(-30);
   const joined = tail.join("\n");
   const options = [];
@@ -136,8 +154,8 @@ export async function sendKey(target, key) {
  * Press an option number only if the expected dialog is on screen, so a digit
  * never lands in the prompt box by accident.
  */
-export async function chooseOption(target, expectedKind, index) {
-  const dialog = readDialog(await capture(target));
+export async function chooseOption(target, expectedKind, index, agent = "claude") {
+  const dialog = readDialog(await capture(target), agent);
   if (dialog.kind !== expectedKind) {
     throw Object.assign(new Error(`no ${expectedKind} dialog on screen (saw ${dialog.kind})`), { status: 409 });
   }
@@ -190,8 +208,8 @@ export async function switchModel(target, model, settingsPath) {
 }
 
 /** Answer a question with free text via its "Type something" option. */
-export async function answerWithText(target, text) {
-  const dialog = readDialog(await capture(target));
+export async function answerWithText(target, text, agent = "claude") {
+  const dialog = readDialog(await capture(target), agent);
   if (dialog.kind !== "question") throw Object.assign(new Error("no question on screen"), { status: 409 });
   const idx = dialog.options.findIndex((o) => /^Type something/i.test(o));
   if (idx < 0) throw Object.assign(new Error("question has no free-text option"), { status: 400 });
@@ -242,14 +260,19 @@ export async function launchClaude({ cwd, args = [], claudeBin = "claude", env =
 }
 
 /** Accept the folder-trust dialog if it appears within `waitMs`. */
-export async function acceptTrustIfShown(target, waitMs = 8000) {
+export async function acceptTrustIfShown(target, waitMs = 8000, agent = "claude") {
   const until = Date.now() + waitMs;
   while (Date.now() < until) {
     let dialog;
     try {
-      dialog = readDialog(await capture(target));
+      dialog = readDialog(await capture(target), agent);
     } catch {
       return false;
+    }
+    if (dialog.kind === "trust" && agent === "gemini") {
+      // Gemini's trust dialog is numbered; option 1 trusts this folder only.
+      await sendKey(target, "1");
+      return true;
     }
     if (dialog.kind === "trust") {
       // The trust dialog is an unnumbered two-item menu with "No, exit" focused.
@@ -264,12 +287,12 @@ export async function acceptTrustIfShown(target, waitMs = 8000) {
   return false;
 }
 
-/** Wait until Claude Code shows its input prompt. */
-export async function waitForInput(target, waitMs = 20000) {
+/** Wait until the agent shows its input prompt. */
+export async function waitForInput(target, waitMs = 20000, agent = "claude") {
   const until = Date.now() + waitMs;
   while (Date.now() < until) {
     try {
-      if (readDialog(await capture(target)).kind === "input") return true;
+      if (readDialog(await capture(target), agent).kind === "input") return true;
     } catch {
       /* pane not ready */
     }

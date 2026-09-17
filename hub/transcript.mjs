@@ -214,22 +214,35 @@ export function parseLine(line) {
  * Events: "entry" (entry)
  */
 export class TranscriptTail extends EventEmitter {
-  constructor(path, { fromOffset = 0, pollMs = 1000 } = {}) {
+  /**
+   * @param {string} path
+   * @param {{fromOffset?: number, pollMs?: number, resolvePath?: () => string}} [opts]
+   *   resolvePath: called on every read, for sessions that can move to another file.
+   */
+  constructor(path, { fromOffset = 0, pollMs = 1000, resolvePath = null } = {}) {
     super();
     this.path = path;
     this.offset = fromOffset;
     this.partial = "";
     this.pollMs = pollMs;
     this.closed = false;
+    this.resolvePath = resolvePath;
+    this.ino = null;
   }
 
-  start() {
-    this.read();
+  watchPath() {
+    this.watcher?.close();
+    this.watcher = null;
     try {
       this.watcher = watch(this.path, { persistent: false }, () => this.read());
     } catch {
       /* file may not exist yet; polling covers it */
     }
+  }
+
+  start() {
+    this.read();
+    this.watchPath();
     this.timer = setInterval(() => this.read(), this.pollMs);
     this.timer.unref?.();
     return this;
@@ -239,17 +252,28 @@ export class TranscriptTail extends EventEmitter {
     if (this.closed || this.reading) return;
     this.reading = true;
     try {
+      const next = this.resolvePath?.();
+      if (next && next !== this.path) {
+        // The session moved to another file: read that one from the start.
+        this.path = next;
+        this.offset = 0;
+        this.partial = "";
+        this.ino = null;
+        this.watchPath();
+      }
       let size;
+      let ino;
       try {
-        size = statSync(this.path).size;
+        ({ size, ino } = statSync(this.path));
       } catch {
         return;
       }
-      if (size < this.offset) {
-        // Truncated or replaced: start over.
+      if (size < this.offset || (this.ino !== null && ino !== this.ino)) {
+        // Truncated, or replaced by a rewritten file: start over.
         this.offset = 0;
         this.partial = "";
       }
+      this.ino = ino;
       if (size === this.offset) return;
       const fd = openSync(this.path, "r");
       try {

@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { CODEX_SOCKET, loadConfig, tailscaleAddress } from "./config.mjs";
 import { CodexBridge, findCodex } from "./codex.mjs";
+import { recentGeminiSessions } from "./gemini.mjs";
 import { Registry, recentProjects, recentTranscripts } from "./sessions.mjs";
 import { Transcriber } from "./stt.mjs";
 import { Notifier } from "./notify.mjs";
@@ -26,6 +27,7 @@ const CLAUDE_MODELS = [
   { id: "fable", name: "Fable" },
   { id: "haiku", name: "Haiku" },
 ];
+const AGENT_LABEL = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json", ".ico": "image/x-icon" };
 
 class HttpError extends Error {
@@ -87,7 +89,11 @@ export function startHub({ quiet = false, feed = true } = {}) {
   const codex = codexBin ? new CodexBridge({ registry, bin: codexBin, socket: CODEX_SOCKET, log, clientVersion: PKG_VERSION }) : null;
   if (codex) void codex.start();
   else if (cfg.codex === true) log(`codex: "${cfg.codexBin}" not found; Codex sessions are off`);
-  const agents = codex ? ["claude", "codex"] : ["claude"];
+  // Gemini CLI sessions arrive through hooks like Claude Code's; the hub only needs the
+  // command to start and resume them from the glasses.
+  const geminiBin = cfg.gemini === false ? null : findCodex(cfg.geminiBin, { exclude: [resolve(HERE, "..")] });
+  const agents = ["claude", ...(codex ? ["codex"] : []), ...(geminiBin ? ["gemini"] : [])];
+  const geminiThreads = new Set(); // ids seen in the recent list, to route a resume
 
   function codexFor(s) {
     if (s.agent !== "codex") return null;
@@ -151,10 +157,11 @@ export function startHub({ quiet = false, feed = true } = {}) {
    * with the final Enter (for example, approve a permission). Refuse instead.
    */
   async function refuseIfDialog(s) {
-    const dialog = tmuxCtl.readDialog(await tmuxCtl.capture(controllable(s), 40));
-    if (dialog.kind === "permission") throw new HttpError(409, "Claude is waiting for approval. Choose an option first.");
-    if (dialog.kind === "question") throw new HttpError(409, "Claude asked a question. Pick an option or answer it by voice.");
-    if (dialog.kind === "trust") throw new HttpError(409, "Claude is asking whether to trust this folder.");
+    const dialog = tmuxCtl.readDialog(await tmuxCtl.capture(controllable(s), 40), s.agent);
+    const who = AGENT_LABEL[s.agent] || "Claude";
+    if (dialog.kind === "permission") throw new HttpError(409, `${who} is waiting for approval. Choose an option first.`);
+    if (dialog.kind === "question") throw new HttpError(409, `${who} asked a question. Pick an option or answer it by voice.`);
+    if (dialog.kind === "trust") throw new HttpError(409, `${who} is asking whether to trust this folder.`);
   }
 
   /** Wait briefly for the prompt to show up on screen (queued or echoed) or in the transcript. */
@@ -177,36 +184,42 @@ export function startHub({ quiet = false, feed = true } = {}) {
   function vocabulary() {
     const names = new Set(registry.list().map((s) => s.project));
     for (const p of recentProjects(10)) names.add(p.project);
-    return `${cfg.sttVocabulary}${codex ? ", Codex" : ""}, ${[...names].join(", ")}`;
+    return `${cfg.sttVocabulary}${codex ? ", Codex" : ""}${geminiBin ? ", Gemini" : ""}, ${[...names].join(", ")}`;
   }
 
   /** Which agent a launch is for: asked for, known from the resumed id, or the default. */
   function launchAgent({ agent, resume }) {
-    if (agent === "claude" || agent === "codex") return agent;
+    if (agent === "claude" || agent === "codex" || agent === "gemini") return agent;
     if (resume && codex?.isCodexThread(resume)) return "codex";
+    if (resume && geminiThreads.has(resume)) return "gemini";
     if (!resume && cfg.defaultAgent === "codex" && codex) return "codex";
+    if (!resume && cfg.defaultAgent === "gemini" && geminiBin) return "gemini";
     return "claude";
   }
 
-  async function launch({ cwd, resume }) {
+  /** Start Claude Code or Gemini CLI in tmux; their hooks register the session. */
+  async function launch({ cwd, resume, agent = "claude" }) {
     if (resume) {
       const live = registry.sessions.get(resume);
       if (live && live.state !== "ended") throw new HttpError(409, "that session is already open");
     }
     if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new HttpError(400, "cwd must be an existing folder");
-    const args = [...(cfg.claudeArgs || []), ...(resume ? ["--resume", resume] : [])];
-    const { name, target } = await tmuxCtl.launchClaude({ cwd, args, env: { GLANCECODE_HOOK_PORT: String(cfg.hookPort) } });
-    registry.expectLaunch(target.pane, { name, origin: "glasses" });
-    log(`launched ${name} in ${cwd}${resume ? ` (resume ${resume.slice(0, 8)})` : ""}`);
+    if (agent === "gemini" && !geminiBin) throw new HttpError(503, "Gemini CLI isn't installed on this computer");
+    const gemini = agent === "gemini";
+    const args = [...((gemini ? cfg.geminiArgs : cfg.claudeArgs) || []), ...(resume ? ["--resume", resume] : [])];
+    const { name, target } = await tmuxCtl.launchClaude({ cwd, args, claudeBin: gemini ? geminiBin : "claude", env: { GLANCECODE_HOOK_PORT: String(cfg.hookPort) } });
+    registry.expectLaunch(target, { name, origin: "glasses" });
+    log(`launched ${gemini ? "gemini " : ""}${name} in ${cwd}${resume ? ` (resume ${resume.slice(0, 8)})` : ""}`);
     // Handle the trust dialog in the background; the SessionStart hook registers the session.
-    tmuxCtl.acceptTrustIfShown(target).catch(() => {});
-    return { name, pane: target.pane };
+    tmuxCtl.acceptTrustIfShown(target, 8000, agent).catch(() => {});
+    return { name, target };
   }
 
-  async function waitForSessionOnPane(pane, ms = 25_000) {
+  async function waitForSessionOnPane(target, ms = 25_000) {
+    const key = tmuxCtl.paneKey(target);
     const until = Date.now() + ms;
     while (Date.now() < until) {
-      const s = registry.list().find((x) => x.tmux?.pane === pane && x.state !== "ended");
+      const s = registry.list().find((x) => x.state !== "ended" && tmuxCtl.paneKey(x.tmux) === key);
       if (s) return s;
       await new Promise((r) => setTimeout(r, 250));
     }
@@ -250,10 +263,13 @@ export function startHub({ quiet = false, feed = true } = {}) {
       const liveIds = new Set(registry.list().filter((s) => s.state !== "ended").map((s) => s.id));
       const claude = recentTranscripts({ liveIds, limit: 15 }).map((t) => ({ ...t, agent: "claude" }));
       const codexRecent = codex ? await codex.recent({ limit: 15, liveIds }).catch(() => []) : [];
-      const sessions = [...claude, ...codexRecent].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
+      const geminiRecent = geminiBin ? recentGeminiSessions({ liveIds, limit: 15 }) : [];
+      for (const g of geminiRecent) geminiThreads.add(g.id);
+      const others = [...codexRecent, ...geminiRecent];
+      const sessions = [...claude, ...others].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
       // A project counts as recent for either agent.
       const projects = new Map(recentProjects(15).map((p) => [p.cwd, p]));
-      for (const t of codexRecent) if (!projects.has(t.cwd) || projects.get(t.cwd).mtime < t.mtime) projects.set(t.cwd, { cwd: t.cwd, project: t.project, mtime: t.mtime });
+      for (const t of others) if (!projects.has(t.cwd) || projects.get(t.cwd).mtime < t.mtime) projects.set(t.cwd, { cwd: t.cwd, project: t.project, mtime: t.mtime });
       return send(res, 200, { agents, projects: [...projects.values()].sort((a, b) => b.mtime - a.mtime).slice(0, 15), sessions });
     }
 
@@ -298,11 +314,12 @@ export function startHub({ quiet = false, feed = true } = {}) {
         log(`codex: started ${session.project} from the glasses`);
         return send(res, 200, { session: session.summaryJSON() });
       }
-      const { pane } = await launch(body);
-      const session = await waitForSessionOnPane(pane);
-      if (!session) throw new HttpError(504, `Claude Code started but did not report in; is the hook installed? (${BRAND.name} install)`);
+      const agent = launchAgent(body);
+      const { target } = await launch({ ...body, agent });
+      const session = await waitForSessionOnPane(target);
+      if (!session) throw new HttpError(504, `${agent === "gemini" ? "Gemini CLI" : "Claude Code"} started but did not report in; is the hook installed? (${BRAND.name} install)`);
       if (body.prompt) {
-        await tmuxCtl.waitForInput(session.tmux);
+        await tmuxCtl.waitForInput(session.tmux, 20000, session.agent);
         await tmuxCtl.sendPrompt(session.tmux, body.prompt);
       }
       return send(res, 200, { session: session.summaryJSON() });
@@ -318,7 +335,8 @@ export function startHub({ quiet = false, feed = true } = {}) {
       }
       if (method === "GET" && action === "models") {
         if (codexFor(s)) return send(res, 200, { models: codex.models });
-        return send(res, 200, { models: CLAUDE_MODELS });
+        // Gemini switches models through an interactive picker, so the glasses don't offer it.
+        return send(res, 200, { models: s.agent === "gemini" ? [] : CLAUDE_MODELS });
       }
       const cx = codexFor(s);
       if (cx) return codexAction(req, res, s, action, method);
@@ -329,7 +347,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
         await tmuxCtl.sendPrompt(controllable(s), text);
         if (!(await confirmDelivered(s, text))) {
           log(`✗ ${s.project}: typed but not seen in the terminal or transcript: ${text.slice(0, 80)}`);
-          throw new HttpError(502, "Typed it, but Claude Code didn't show it. Is that terminal scrolled or in another mode?");
+          throw new HttpError(502, `Typed it, but ${AGENT_LABEL[s.agent] || "Claude"} didn't show it. Is that terminal scrolled or in another mode?`);
         }
         log(`→ ${s.project}: ${text}`);
         return send(res, 200, { ok: true });
@@ -340,7 +358,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
       }
       if (method === "POST" && action === "choose") {
         const { index, kind } = await readJSON(req);
-        const chosen = await tmuxCtl.chooseOption(controllable(s), kind === "question" ? "question" : "permission", Number(index));
+        const chosen = await tmuxCtl.chooseOption(controllable(s), kind === "question" ? "question" : "permission", Number(index), s.agent);
         log(`→ ${s.project}: chose "${chosen}"`);
         if (kind === "question" && s.waiting?.kind === "question") {
           s.waiting.questionIndex = (s.waiting.questionIndex || 0) + 1;
@@ -354,15 +372,24 @@ export function startHub({ quiet = false, feed = true } = {}) {
       }
       if (method === "POST" && action === "answer") {
         const { text } = await readJSON(req);
-        await tmuxCtl.answerWithText(controllable(s), String(text || ""));
+        await tmuxCtl.answerWithText(controllable(s), String(text || ""), s.agent);
         return send(res, 200, { ok: true });
       }
       if (method === "POST" && action === "screen") {
         const screen = await tmuxCtl.capture(controllable(s), 40);
-        return send(res, 200, { dialog: tmuxCtl.readDialog(screen) });
+        return send(res, 200, { dialog: tmuxCtl.readDialog(screen, s.agent) });
       }
       if (method === "POST" && action === "command") {
         const { command } = await readJSON(req);
+        if (s.agent === "gemini") {
+          // Gemini calls compacting /compress, and has no one-line model switch.
+          const geminiCommand = { "/compact": "/compress", "/compress": "/compress", "/clear": "/clear" }[String(command)];
+          if (!geminiCommand) throw new HttpError(400, /^\/model /.test(String(command)) ? "Switch Gemini's model at the computer with /model" : "command not allowed");
+          await refuseIfDialog(s);
+          await tmuxCtl.sendPrompt(controllable(s), geminiCommand);
+          log(`→ ${s.project} (gemini): ${geminiCommand}`);
+          return send(res, 200, { ok: true });
+        }
         const allowed = /^\/(model (opus|sonnet|haiku|fable)(\[1m\])?|compact|clear|cost|context)$/;
         if (!allowed.test(String(command))) throw new HttpError(400, "command not allowed");
         await refuseIfDialog(s);
@@ -495,6 +522,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
   if (notifier.enabled) log(`phone push: ntfy topic set`);
   if (awake) log("holding the Mac awake while plugged in");
   if (codex) log(`codex: following Codex sessions (${codexBin})`);
+  if (geminiBin) log(`gemini: Gemini CLI found (${geminiBin})`);
 
   return {
     cfg,
