@@ -206,10 +206,7 @@ function socketAlive(path, ms = 800) {
  */
 export function findCodex(bin = "codex", { exclude = [] } = {}) {
   if (bin.includes("/")) return existsSync(bin) ? bin : null;
-  const shell = process.env.SHELL || "/bin/zsh";
-  const r = spawnSync(shell, ["-lic", 'printf "\\n__PATH__%s\\n" "$PATH"'], { encoding: "utf8", timeout: 8000 });
-  const shellPath = /__PATH__(.*)/.exec(r.stdout || "")?.[1] || "";
-  const dirs = [...new Set([...shellPath.split(":"), ...(process.env.PATH || "").split(":")].filter(Boolean))];
+  const dirs = [...new Set([...loginShellPath().split(":"), ...(process.env.PATH || "").split(":")].filter(Boolean))];
   for (const dir of dirs) {
     const candidate = join(dir, bin);
     try {
@@ -222,6 +219,17 @@ export function findCodex(bin = "codex", { exclude = [] } = {}) {
     return candidate;
   }
   return null;
+}
+
+let cachedShellPath = null;
+
+/** PATH as the user's login shell sets it. Starting that shell takes a second or two, so ask once. */
+function loginShellPath() {
+  if (cachedShellPath !== null) return cachedShellPath;
+  const shell = process.env.SHELL || "/bin/zsh";
+  const r = spawnSync(shell, ["-lic", 'printf "\\n__PATH__%s\\n" "$PATH"'], { encoding: "utf8", timeout: 8000 });
+  cachedShellPath = /__PATH__(.*)/.exec(r.stdout || "")?.[1] || "";
+  return cachedShellPath;
 }
 
 export function codexVersion(bin) {
