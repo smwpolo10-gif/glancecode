@@ -6,7 +6,8 @@ import { extname, join, normalize, resolve } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { loadConfig, tailscaleAddress } from "./config.mjs";
+import { CODEX_SOCKET, loadConfig, tailscaleAddress } from "./config.mjs";
+import { CodexBridge, findCodex } from "./codex.mjs";
 import { Registry, recentProjects, recentTranscripts } from "./sessions.mjs";
 import { Transcriber } from "./stt.mjs";
 import { Notifier } from "./notify.mjs";
@@ -17,6 +18,14 @@ import { BRAND } from "./brand.mjs";
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const APP_DIST = resolve(HERE, "..", "app", "dist");
 const EVENT_BUFFER = 3000;
+const PKG_VERSION = JSON.parse(readFileSync(resolve(HERE, "..", "package.json"), "utf8")).version;
+// What the glasses menu offers for Claude sessions; Codex lists its own.
+const CLAUDE_MODELS = [
+  { id: "opus", name: "Opus" },
+  { id: "sonnet", name: "Sonnet" },
+  { id: "fable", name: "Fable" },
+  { id: "haiku", name: "Haiku" },
+];
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json", ".ico": "image/x-icon" };
 
 class HttpError extends Error {
@@ -72,6 +81,19 @@ export function startHub({ quiet = false, feed = true } = {}) {
 
   registry.load();
   tmuxCtl.reloadTmuxConf().catch(() => {}); // settings added in newer versions reach a running tmux server
+
+  // Codex sessions come from Codex's own app-server, which the hub joins as a client.
+  const codexBin = cfg.codex === false ? null : findCodex(cfg.codexBin, { exclude: [resolve(HERE, "..")] });
+  const codex = codexBin ? new CodexBridge({ registry, bin: codexBin, socket: CODEX_SOCKET, log, clientVersion: PKG_VERSION }) : null;
+  if (codex) void codex.start();
+  else if (cfg.codex === true) log(`codex: "${cfg.codexBin}" not found; Codex sessions are off`);
+  const agents = codex ? ["claude", "codex"] : ["claude"];
+
+  function codexFor(s) {
+    if (s.agent !== "codex") return null;
+    if (!codex) throw new HttpError(503, "Codex support is off on this hub");
+    return codex;
+  }
   const sweepTimer = setInterval(() => registry.sweep().catch(() => {}), 5000);
 
   let lastPresenceAt = 0;
@@ -155,7 +177,15 @@ export function startHub({ quiet = false, feed = true } = {}) {
   function vocabulary() {
     const names = new Set(registry.list().map((s) => s.project));
     for (const p of recentProjects(10)) names.add(p.project);
-    return `${cfg.sttVocabulary}, ${[...names].join(", ")}`;
+    return `${cfg.sttVocabulary}${codex ? ", Codex" : ""}, ${[...names].join(", ")}`;
+  }
+
+  /** Which agent a launch is for: asked for, known from the resumed id, or the default. */
+  function launchAgent({ agent, resume }) {
+    if (agent === "claude" || agent === "codex") return agent;
+    if (resume && codex?.isCodexThread(resume)) return "codex";
+    if (!resume && cfg.defaultAgent === "codex" && codex) return "codex";
+    return "claude";
   }
 
   async function launch({ cwd, resume }) {
@@ -213,12 +243,18 @@ export function startHub({ quiet = false, feed = true } = {}) {
     }
 
     if (method === "GET" && path === "/api/state") {
-      return send(res, 200, { seq, sessions: registry.list().map((s) => s.summaryJSON()) });
+      return send(res, 200, { seq, agents, sessions: registry.list().map((s) => s.summaryJSON()) });
     }
 
     if (method === "GET" && path === "/api/recent") {
       const liveIds = new Set(registry.list().filter((s) => s.state !== "ended").map((s) => s.id));
-      return send(res, 200, { projects: recentProjects(15), sessions: recentTranscripts({ liveIds, limit: 15 }) });
+      const claude = recentTranscripts({ liveIds, limit: 15 }).map((t) => ({ ...t, agent: "claude" }));
+      const codexRecent = codex ? await codex.recent({ limit: 15, liveIds }).catch(() => []) : [];
+      const sessions = [...claude, ...codexRecent].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
+      // A project counts as recent for either agent.
+      const projects = new Map(recentProjects(15).map((p) => [p.cwd, p]));
+      for (const t of codexRecent) if (!projects.has(t.cwd) || projects.get(t.cwd).mtime < t.mtime) projects.set(t.cwd, { cwd: t.cwd, project: t.project, mtime: t.mtime });
+      return send(res, 200, { agents, projects: [...projects.values()].sort((a, b) => b.mtime - a.mtime).slice(0, 15), sessions });
     }
 
     if (method === "POST" && path === "/api/log") {
@@ -247,6 +283,21 @@ export function startHub({ quiet = false, feed = true } = {}) {
 
     if (method === "POST" && path === "/api/sessions") {
       const body = await readJSON(req);
+      if (launchAgent(body) === "codex") {
+        if (!codex) throw new HttpError(503, "Codex support is off on this hub");
+        if (body.resume) {
+          const live = registry.sessions.get(body.resume);
+          if (live && live.state !== "ended") throw new HttpError(409, "that session is already open");
+          const session = await codex.resumeSession({ id: body.resume });
+          if (body.prompt) await codex.prompt(session, body.prompt);
+          log(`codex: resumed ${session.project} (${session.id.slice(0, 8)})`);
+          return send(res, 200, { session: session.summaryJSON() });
+        }
+        if (!body.cwd || !existsSync(body.cwd) || !statSync(body.cwd).isDirectory()) throw new HttpError(400, "cwd must be an existing folder");
+        const session = await codex.startSession({ cwd: body.cwd, prompt: body.prompt });
+        log(`codex: started ${session.project} from the glasses`);
+        return send(res, 200, { session: session.summaryJSON() });
+      }
       const { pane } = await launch(body);
       const session = await waitForSessionOnPane(pane);
       if (!session) throw new HttpError(504, `Claude Code started but did not report in; is the hook installed? (${BRAND.name} install)`);
@@ -265,6 +316,12 @@ export function startHub({ quiet = false, feed = true } = {}) {
         const limit = Math.min(Number(url.searchParams.get("items") || 150), 300);
         return send(res, 200, { seq, session: s.summaryJSON(), items: s.items.slice(-limit) });
       }
+      if (method === "GET" && action === "models") {
+        if (codexFor(s)) return send(res, 200, { models: codex.models });
+        return send(res, 200, { models: CLAUDE_MODELS });
+      }
+      const cx = codexFor(s);
+      if (cx) return codexAction(req, res, s, action, method);
       if (method === "POST" && action === "prompt") {
         const { text } = await readJSON(req);
         if (!text || typeof text !== "string") throw new HttpError(400, "text required");
@@ -320,6 +377,58 @@ export function startHub({ quiet = false, feed = true } = {}) {
         log(`→ ${s.project}: ${command}`);
         return send(res, 200, { ok: true });
       }
+    }
+    throw new HttpError(404, "not found");
+  }
+
+  /** The same session actions for a Codex session, through its app-server instead of tmux. */
+  async function codexAction(req, res, s, action, method) {
+    if (method !== "POST") throw new HttpError(404, "not found");
+    const run = async (fn) => {
+      try {
+        return await fn();
+      } catch (err) {
+        throw err instanceof HttpError ? err : new HttpError(err.status || 502, err.message);
+      }
+    };
+    if (action === "prompt") {
+      const { text } = await readJSON(req);
+      if (!text || typeof text !== "string") throw new HttpError(400, "text required");
+      await run(() => codex.prompt(s, text));
+      log(`→ ${s.project} (codex): ${text}`);
+      return send(res, 200, { ok: true });
+    }
+    if (action === "interrupt") {
+      await run(() => codex.interrupt(s));
+      return send(res, 200, { ok: true });
+    }
+    if (action === "choose") {
+      const { index, kind } = await readJSON(req);
+      const chosen = await run(() => codex.choose(s, kind === "question" ? "question" : "permission", Number(index)));
+      log(`→ ${s.project} (codex): chose "${chosen}"`);
+      return send(res, 200, { ok: true, chosen });
+    }
+    if (action === "answer") {
+      const { text } = await readJSON(req);
+      await run(() => codex.answer(s, String(text || "")));
+      return send(res, 200, { ok: true });
+    }
+    if (action === "screen") return send(res, 200, { dialog: codex.dialog(s) });
+    if (action === "command") {
+      const { command } = await readJSON(req);
+      if (command === "/compact") {
+        await run(() => codex.compact(s));
+        log(`→ ${s.project} (codex): /compact`);
+        return send(res, 200, { ok: true });
+      }
+      const model = /^\/model ([\w.:-]+)$/.exec(String(command))?.[1];
+      if (model && codex.models.some((m) => m.id === model)) {
+        await run(() => codex.setModel(s, model));
+        log(`→ ${s.project} (codex): model ${model} from the next prompt`);
+        return send(res, 200, { ok: true });
+      }
+      if (model) throw new HttpError(400, `Codex models: ${codex.models.map((m) => m.id).join(", ") || "none listed yet"}`);
+      throw new HttpError(400, "command not allowed");
     }
     throw new HttpError(404, "not found");
   }
@@ -385,6 +494,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
   else transcriber.ensure().then(() => log("voice: whisper ready")).catch((err) => log(`voice: ${err.message}`));
   if (notifier.enabled) log(`phone push: ntfy topic set`);
   if (awake) log("holding the Mac awake while plugged in");
+  if (codex) log(`codex: following Codex sessions (${codexBin})`);
 
   return {
     cfg,
@@ -396,6 +506,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
       hookServer.close();
       for (const s of apiServers) s.close();
       transcriber.stop();
+      codex?.stop();
       for (const s of registry.sessions.values()) s.tail?.close();
     },
   };

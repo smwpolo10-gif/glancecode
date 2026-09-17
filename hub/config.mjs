@@ -14,6 +14,8 @@ export const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 export const STATE_FILE = join(CONFIG_DIR, "sessions.json");
 export const TMUX_CONF = join(CONFIG_DIR, "tmux.conf");
 export const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
+// Codex's app-server listens on this socket; the file is created owner-only.
+export const CODEX_SOCKET = env("CODEX_SOCKET") || join(CONFIG_DIR, "codex.sock");
 
 migrateLegacyDirs();
 
@@ -37,6 +39,11 @@ const DEFAULTS = {
   // macOS: hold the machine awake while the hub runs, so the glasses can reach it.
   // Only while plugged in; on battery the Mac still sleeps normally.
   preventSleep: true,
+  // Codex CLI sessions: "auto" follows them when the codex command is installed.
+  codex: "auto",
+  codexBin: "codex",
+  // What "New session" starts from a glasses app that doesn't ask ("claude" or "codex").
+  defaultAgent: "claude",
 };
 
 /** Read the raw config file without generating tokens (used at import time). */

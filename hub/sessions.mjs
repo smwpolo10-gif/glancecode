@@ -27,6 +27,8 @@ function pidAlive(pid) {
 export class Session {
   constructor({ id, cwd, transcriptPath }) {
     this.id = id;
+    /** @type {"claude"|"codex"} */
+    this.agent = "claude";
     this.cwd = cwd;
     this.project = basename(cwd || "") || "claude";
     this.transcriptPath = transcriptPath;
@@ -54,12 +56,14 @@ export class Session {
   }
 
   get controllable() {
+    if (this.agent === "codex") return !!this.codexJoined && this.state !== "ended";
     return !!this.tmux && this.state !== "ended";
   }
 
   summaryJSON() {
     return {
       id: this.id,
+      agent: this.agent,
       project: this.project,
       cwd: this.cwd,
       state: this.state,
@@ -126,7 +130,8 @@ export class Registry extends EventEmitter {
   scheduleSave() {
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
-      const sessions = [...this.sessions.values()].filter((s) => s.state !== "ended").map((s) => s.persistJSON());
+      // Codex sessions are rediscovered from its app-server, so only Claude sessions persist.
+      const sessions = [...this.sessions.values()].filter((s) => s.state !== "ended" && s.agent === "claude").map((s) => s.persistJSON());
       try {
         writeFileSync(STATE_FILE, JSON.stringify({ sessions }, null, 2));
       } catch {
@@ -140,9 +145,29 @@ export class Registry extends EventEmitter {
 
   attach(session) {
     this.sessions.set(session.id, session);
-    this.loadHistory(session);
+    if (session.agent === "claude") this.loadHistory(session);
     this.scheduleSave();
     this.changed(session);
+  }
+
+  /** Add display items, skipping ones already shown, and publish the new ones when live. */
+  addItems(session, items, live) {
+    const fresh = [];
+    for (const item of items) {
+      if (session.itemKeys.has(item.key)) continue;
+      session.itemKeys.add(item.key);
+      session.items.push(item);
+      fresh.push(item);
+    }
+    if (session.items.length > MAX_ITEMS) {
+      const drop = session.items.splice(0, session.items.length - MAX_ITEMS);
+      for (const d of drop) session.itemKeys.delete(d.key);
+    }
+    if (live && fresh.length) {
+      session.lastActivity = Date.now();
+      this.emit("items", session, fresh);
+    }
+    return fresh;
   }
 
   loadHistory(session) {
@@ -179,17 +204,7 @@ export class Registry extends EventEmitter {
       if (meta.summary) session.summary = meta.summary;
       if (meta.permissionMode) session.permissionMode = meta.permissionMode;
     }
-    const fresh = [];
-    for (const item of entryToItems(entry)) {
-      if (session.itemKeys.has(item.key)) continue;
-      session.itemKeys.add(item.key);
-      session.items.push(item);
-      fresh.push(item);
-    }
-    if (session.items.length > MAX_ITEMS) {
-      const drop = session.items.splice(0, session.items.length - MAX_ITEMS);
-      for (const d of drop) session.itemKeys.delete(d.key);
-    }
+    const fresh = this.addItems(session, entryToItems(entry), false);
     if (live && fresh.length) {
       session.lastActivity = Date.now();
       // Interrupts and declined permissions end the turn without a Stop hook.
@@ -335,7 +350,7 @@ export class Registry extends EventEmitter {
 
   async sweep() {
     for (const s of this.sessions.values()) {
-      if (s.state === "ended") continue;
+      if (s.state === "ended" || s.agent !== "claude") continue; // Codex reports its own lifecycle
       let alive = s.pid ? pidAlive(s.pid) : true;
       if (alive && s.tmux) {
         const paneOk = await paneAlive(s.tmux);
