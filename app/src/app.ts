@@ -531,7 +531,7 @@ class HomeScreen implements Screen {
         lineRows.push(i);
       } else {
         const s = r.s;
-        const right = `${stateLabel(s)} · ${ago(s.lastActivity)}`;
+        const right = `${stateLabel(s)}${s.terminalState ? " · Mac" : ""} · ${ago(s.lastActivity)}`;
         const viewOnly = !s.controllable && s.state !== "ended" ? " (view)" : "";
         const unread = this.app.completions.has(s.id) ? "● " : "";
         lines.push(spread(`${cur}${unread}${GLYPH[s.state]} ${sessionName(s, sessions, this.app.hub.agents.length > 1)}${viewOnly}`, right, BODY_INNER_W));
@@ -725,7 +725,13 @@ class SessionScreen implements Screen {
     if (!s) return { header: "Session closed", body: wrap("This session is no longer running. Double-tap to go back.", BODY_INNER_W), menu };
     const items = this.app.hub.items.get(this.id);
     if (!items) this.app.hub.ensureItems(this.id); // self-heal if the cache was dropped
-    const transcript = !items ? ["Loading…"] : items.length ? itemsToLines(items, BODY_INNER_W) : s.controllable ? ["Nothing here yet. Hold to talk."] : [];
+    const transcript = !items
+      ? ["Loading…"]
+      : items.length
+        ? itemsToLines(items, BODY_INNER_W)
+        : s.controllable
+          ? [s.terminalState === "waiting" ? "Mac terminal is open. Hold to talk." : "Nothing here yet. Hold to talk."]
+          : [];
     const following = this.scroll === 0;
     const waitBlock = following ? this.waitingLines(s) : [];
     const room = BODY_LINES - Math.min(waitBlock.length, BODY_LINES - 2);

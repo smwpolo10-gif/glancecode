@@ -103,6 +103,7 @@ export class Session {
       origin: this.origin,
       controllable: this.controllable,
       tmuxName: this.tmuxName,
+      terminalState: this.tmuxName ? (this.agent === "codex" && this.codexTerminalPending ? "waiting" : "open") : null,
       lastActivity: this.lastActivity,
       backgroundTasks: this.backgroundTasks,
       itemCount: this.items.length,

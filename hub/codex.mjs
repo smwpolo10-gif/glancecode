@@ -21,6 +21,8 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const RELEASE_IDLE_MS = Number(process.env.GLANCECODE_CODEX_RELEASE_MS) || 20 * 60_000;
 const UNLOAD_WAIT_MS = 90_000; // Codex unloads an unwatched thread about a minute after idle
 const MAX_TEXT = 4000;
+const NO_UPDATE_CHECK = "check_for_update_on_startup=false";
+const TERMINAL_WAIT_COMMAND = 'printf "\\n  Terminal HUD · Codex\\n\\n  Session ready. Send the first message from your glasses.\\n  This window will switch to Codex automatically.\\n\\n"; while :; do sleep 3600; done';
 
 const clip = (s, n = 60) => {
   const t = String(s ?? "").replace(/\s+/g, " ").trim();
@@ -334,15 +336,16 @@ export function remoteArgs(socket, args = [], cwd = null) {
 
 export class CodexBridge extends EventEmitter {
   /**
-   * @param {{registry: import("./sessions.mjs").Registry, bin: string, socket: string, log: Function, clientVersion: string}} opts
+   * @param {{registry: import("./sessions.mjs").Registry, bin: string, socket: string, log: Function, clientVersion: string, tmux?: typeof tmuxCtl}} opts
    */
-  constructor({ registry, bin, socket, log = () => {}, clientVersion = "0" }) {
+  constructor({ registry, bin, socket, log = () => {}, clientVersion = "0", tmux = tmuxCtl }) {
     super();
     this.registry = registry;
     this.bin = bin;
     this.socket = socket;
     this.log = log;
     this.clientVersion = clientVersion;
+    this.tmuxCtl = tmux;
     this.ws = null;
     this.ready = false;
     this.nextId = 1;
@@ -794,6 +797,9 @@ export class CodexBridge extends EventEmitter {
     s.codexTurnId = r?.turn?.id || s.codexTurnId;
     s.state = "working";
     this.registry.changed(s);
+    if (s.codexTerminalPending) {
+      await this.activateTerminal(s).catch((err) => this.log(`codex: terminal for ${s.project}: ${err.message}`));
+    }
   }
 
   async interrupt(s) {
@@ -808,10 +814,13 @@ export class CodexBridge extends EventEmitter {
     this.suppressedThreads.add(s.id);
     this.joining.delete(s.id);
     s.openTerminalAfterTurn = false;
+    s.codexTerminalPending = false;
     if (s.codexTurnId) await this.interrupt(s);
     if (s.tmuxName) {
-      await tmuxCtl.tmux(null, ["kill-session", "-t", s.tmuxName]).catch((err) => this.log(`codex: close terminal: ${err.message}`));
+      await this.tmuxCtl.tmux(null, ["kill-session", "-t", s.tmuxName]).catch((err) => this.log(`codex: close terminal: ${err.message}`));
     }
+    s.tmuxName = null;
+    s.codexTerminalApp = null;
     await this.call("thread/unsubscribe", { threadId: s.id }).catch(() => {});
     s.codexJoined = false;
     s.state = "ended";
@@ -847,10 +856,14 @@ export class CodexBridge extends EventEmitter {
       throw err;
     }
 
+    const reopenTerminal = !!s.tmuxName;
     replacement.model = s.model || replacement.model;
     replacement.context = null;
     replacement.origin = s.origin;
     await this.end(s);
+    if (reopenTerminal) {
+      await this.openPendingTerminal(replacement).catch((err) => this.log(`codex: terminal for ${replacement.project}: ${err.message}`));
+    }
     this.registry.changed(replacement);
     return replacement;
   }
@@ -957,19 +970,22 @@ export class CodexBridge extends EventEmitter {
     return this.knownThreads.has(id) || !!this.session(id);
   }
 
-  /** A new session from the glasses. The terminal UI attaches after the first turn, once it can. */
+  /** A new session from the glasses. Its Mac terminal waits visibly until the first message. */
   async startSession({ cwd, prompt, openTerminal = false }) {
     if (!this.ready) throw Object.assign(new Error("Codex isn't connected right now"), { status: 503 });
     const r = await this.call("thread/start", { cwd });
     const s = this.adopt(r.thread, r.model, r.reasoningEffort);
     if (!s) throw Object.assign(new Error("that folder is outside this hub's allowed roots"), { status: 403 });
     s.origin = "glasses";
-    s.openTerminalAfterTurn = openTerminal;
+    s.openTerminalAfterTurn = false;
     const model = this.models.find((m) => m.id === s.model);
     if (model?.efforts?.includes("high") && s.effort !== "high") {
       await this.call("thread/settings/update", { threadId: s.id, effort: "high" });
       s.effort = "high";
       this.registry.changed(s);
+    }
+    if (openTerminal) {
+      await this.openPendingTerminal(s).catch((err) => this.log(`codex: terminal for ${s.project}: ${err.message}`));
     }
     if (prompt) await this.prompt(s, prompt);
     return s;
@@ -986,13 +1002,57 @@ export class CodexBridge extends EventEmitter {
     return s;
   }
 
-  /** Run the Codex terminal UI for a session in tmux, so it can be attached at the desk. */
-  async openTerminal(s) {
-    const name = tmuxCtl.sessionNameFor(s.cwd, await tmuxCtl.listOurSessions());
-    await tmuxCtl.tmux(null, ["new-session", "-d", "-s", name, "-c", s.cwd, "-x", "200", "-y", "50", "--", ...tmuxCtl.loginShellCommand(this.bin, remoteArgs(this.socket, ["resume", s.id], s.cwd))]);
+  /** Open a visible waiting terminal for a brand-new thread that Codex cannot resume yet. */
+  async openPendingTerminal(s) {
+    const name = this.tmuxCtl.sessionNameFor(s.cwd, await this.tmuxCtl.listOurSessions());
+    await this.tmuxCtl.tmux(null, [
+      "new-session", "-d", "-s", name, "-c", s.cwd, "-x", "200", "-y", "50",
+      "--", "/bin/sh", "-c", TERMINAL_WAIT_COMMAND,
+    ]);
     s.tmuxName = name;
+    s.codexTerminalPending = true;
     this.registry.changed(s);
-    const terminalApp = await tmuxCtl.openAttachedTerminal({ cwd: s.cwd, name });
+    try {
+      const terminalApp = await this.tmuxCtl.openAttachedTerminal({ cwd: s.cwd, name });
+      s.codexTerminalApp = terminalApp;
+      this.registry.changed(s);
+      this.log(`codex: waiting terminal for ${s.project} in ${terminalApp === "orca" ? "Orca" : "Mac Terminal"} (${name})`);
+      return terminalApp;
+    } catch (err) {
+      await this.tmuxCtl.tmux(null, ["kill-session", "-t", name]).catch(() => {});
+      s.tmuxName = null;
+      s.codexTerminalPending = false;
+      s.codexTerminalApp = null;
+      this.registry.changed(s);
+      throw err;
+    }
+  }
+
+  /** Replace the waiting pane with the TUI once the first turn makes the thread resumable. */
+  async activateTerminal(s) {
+    if (!s.codexTerminalPending || !s.tmuxName || s.state === "ended" || this.suppressedThreads.has(s.id)) return null;
+    const args = remoteArgs(this.socket, ["resume", "-c", NO_UPDATE_CHECK, s.id], s.cwd);
+    await this.tmuxCtl.tmux(null, [
+      "respawn-pane", "-k", "-t", s.tmuxName, "-c", s.cwd,
+      "--", ...this.tmuxCtl.loginShellCommand(this.bin, args),
+    ]);
+    s.codexTerminalPending = false;
+    this.registry.changed(s);
+    this.log(`codex: attached terminal for ${s.project} (${s.tmuxName})`);
+    return s.codexTerminalApp || true;
+  }
+
+  /** Run the Codex terminal UI for an existing session in tmux. */
+  async openTerminal(s) {
+    const name = this.tmuxCtl.sessionNameFor(s.cwd, await this.tmuxCtl.listOurSessions());
+    const args = remoteArgs(this.socket, ["resume", "-c", NO_UPDATE_CHECK, s.id], s.cwd);
+    await this.tmuxCtl.tmux(null, ["new-session", "-d", "-s", name, "-c", s.cwd, "-x", "200", "-y", "50", "--", ...this.tmuxCtl.loginShellCommand(this.bin, args)]);
+    s.tmuxName = name;
+    s.codexTerminalPending = false;
+    this.registry.changed(s);
+    const terminalApp = await this.tmuxCtl.openAttachedTerminal({ cwd: s.cwd, name });
+    s.codexTerminalApp = terminalApp;
+    this.registry.changed(s);
     this.log(`codex: terminal for ${s.project} in ${terminalApp === "orca" ? "Orca" : "Mac Terminal"} (${name})`);
     return terminalApp;
   }

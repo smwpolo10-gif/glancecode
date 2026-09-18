@@ -337,7 +337,12 @@ export function startHub({ quiet = false, feed = true } = {}) {
         if (!registry.allows(body.cwd)) throw new HttpError(403, "that folder is outside this hub's allowed roots");
         const session = await codex.startSession({ cwd: body.cwd, prompt: body.prompt, openTerminal: body.openTerminal === true });
         log(`codex: started ${session.project} from the glasses`);
-        return send(res, 200, { session: session.summaryJSON(), terminalPending: body.openTerminal === true });
+        return send(res, 200, {
+          session: session.summaryJSON(),
+          terminalOpened: !!session.codexTerminalApp,
+          terminalPending: !!session.codexTerminalPending,
+          terminalApp: session.codexTerminalApp || null,
+        });
       }
       const agent = launchAgent(body);
       const { name, target } = await launch({ ...body, agent });

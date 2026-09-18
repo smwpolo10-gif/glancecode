@@ -1,6 +1,6 @@
 // Build and pack the Even Hub app.
 //
-//   npm run pack                bump the patch version, build, pack ../glancecode.ehpk
+//   npm run pack                bump the patch version, build, pack a stable and versioned .ehpk
 //   npm run pack -- minor       bump minor (or major)
 //   npm run pack -- --no-bump   pack the current version
 //   npm run pack -- --store     ignore app.local.json (the build to upload to the store)
@@ -12,9 +12,9 @@
 // example a different package_id or extra whitelist origins for a dev machine:
 //   { "package_id": "com.example.myglance", "extraWhitelist": ["http://100.101.102.103:7717"] }
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const args = process.argv.slice(2);
 const bump = args.includes("--no-bump") ? null : args.find((a) => a === "major" || a === "minor") || "patch";
@@ -54,4 +54,7 @@ try {
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
-console.log(`\nUpload ${out} (v${manifest.version}, ${packManifest.package_id}) at hub.evenrealities.com`);
+const namedOut = join(dirname(out), `Glance Code v${manifest.version}.ehpk`);
+if (namedOut !== out) copyFileSync(out, namedOut);
+console.log(`\nNamed copy ${namedOut}`);
+console.log(`Upload ${namedOut} (v${manifest.version}, ${packManifest.package_id}) at hub.evenrealities.com`);

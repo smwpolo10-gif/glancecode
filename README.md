@@ -178,6 +178,12 @@ the glasses can still reach it.
 Run `glancecode attach [name]` to use the same live session from a computer
 terminal while the glasses remain connected.
 
+With **Open new glasses sessions in a Mac terminal** enabled, a new Codex
+session opens a waiting Orca or Terminal window immediately. The window changes
+into the real Codex TUI when the first glasses message starts. **End session**
+interrupts any active turn, closes that tmux terminal, and removes the live row;
+the saved transcript remains available from History.
+
 ## Security
 
 - The hub listens on 127.0.0.1 only. Your phone reaches it through
@@ -225,7 +231,7 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability and
   into them.
 - Gemini CLI's model can't be switched from the glasses; its model picker is
   interactive, so use `/model` at the computer.
-- Codex sessions must be started with `glancecode codex` to show up live.
+- Codex sessions started at the computer must use `glancecode codex` to show up live.
 - Switching a Codex session's model from the glasses applies from the next message
   you send from the glasses.
 

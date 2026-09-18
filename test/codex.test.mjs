@@ -265,6 +265,56 @@ test("a new Codex session defaults to high effort when its model supports it", a
   ]);
 });
 
+test("a glasses Codex session opens a waiting Mac terminal, attaches on first prompt, and closes it on End", async () => {
+  const registry = Object.assign(new EventEmitter(), {
+    sessions: new Map(),
+    allows: () => true,
+    changed() {},
+    attach(s) { this.sessions.set(s.id, s); },
+    remove(id) { return this.sessions.delete(id); },
+  });
+  const tmuxCalls = [];
+  const fakeTmux = {
+    async listOurSessions() { return new Set(); },
+    sessionNameFor() { return "project"; },
+    async tmux(socket, args) { tmuxCalls.push({ socket, args }); return ""; },
+    async openAttachedTerminal() { return "orca"; },
+    loginShellCommand(bin, args) { return [bin, ...args]; },
+  };
+  const bridge = new codex.CodexBridge({ registry, bin: "/bin/codex", socket: "/tmp/codex.sock", tmux: fakeTmux });
+  bridge.ready = true;
+  bridge.models = [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", efforts: ["high"] }];
+  const rpc = [];
+  bridge.call = async (method, params) => {
+    rpc.push({ method, params });
+    if (method === "thread/start") return { thread: { id: "new", cwd: "/allowed/project", status: { type: "idle" }, turns: [] }, model: "gpt-5.6-sol", reasoningEffort: "high" };
+    if (method === "turn/start") return { turn: { id: "turn-1" } };
+    return {};
+  };
+
+  const s = await bridge.startSession({ cwd: "/allowed/project", openTerminal: true });
+  assert.equal(s.tmuxName, "project");
+  assert.equal(s.codexTerminalPending, true);
+  assert.equal(s.codexTerminalApp, "orca");
+  assert.equal(s.summaryJSON().terminalState, "waiting");
+  assert.equal(tmuxCalls[0].args[0], "new-session");
+
+  await bridge.prompt(s, "hello");
+  assert.equal(s.codexTerminalPending, false);
+  assert.equal(s.summaryJSON().terminalState, "open");
+  const respawn = tmuxCalls.find((c) => c.args[0] === "respawn-pane");
+  assert.ok(respawn);
+  assert.ok(respawn.args.includes("check_for_update_on_startup=false"));
+  assert.ok(respawn.args.includes("new"));
+
+  s.codexTurnId = null;
+  await bridge.end(s);
+  assert.equal(s.tmuxName, null);
+  assert.equal(registry.sessions.has("new"), false);
+  assert.deepEqual(tmuxCalls.at(-1).args, ["kill-session", "-t", "project"]);
+  assert.ok(rpc.some((c) => c.method === "thread/unsubscribe"));
+});
+
 test("codex refuses threads outside the configured roots", async () => {
   const attached = [];
   const registry = Object.assign(new EventEmitter(), {

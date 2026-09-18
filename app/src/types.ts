@@ -31,6 +31,8 @@ export interface SessionSummary {
   origin: "terminal" | "glasses";
   controllable: boolean;
   tmuxName: string | null;
+  /** Whether a visible Mac terminal is attached or waiting for Codex's first message. */
+  terminalState?: "waiting" | "open" | null;
   lastActivity: number;
   backgroundTasks: number;
   itemCount: number;
