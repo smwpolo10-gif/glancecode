@@ -249,16 +249,16 @@ export class Hub {
     return this.req<{ agents?: Agent[]; projects: RecentProject[]; sessions: RecentSession[] }>("GET", "/api/recent");
   }
   launch(cwd: string, resume?: string, agent?: Agent, openTerminal = false) {
-    return this.req<{ session: SessionSummary; terminalOpened?: boolean; terminalApp?: "orca" | "terminal" | null }>("POST", "/api/sessions", { cwd, resume, agent, openTerminal });
+    return this.req<{ session: SessionSummary; terminalOpened?: boolean; terminalPending?: boolean; terminalApp?: "orca" | "terminal" | null }>("POST", "/api/sessions", { cwd, resume, agent, openTerminal });
   }
   /** Models a session can switch to. Per agent, since every session of an agent offers the same list. */
   async models(id: string): Promise<ModelChoice[]> {
     const agent = this.sessions.get(id)?.agent || "claude";
     const cached = this.modelCache.get(agent);
-    if (cached) return cached;
+    if (cached?.length) return cached;
     try {
       const { models } = await this.req<{ models: ModelChoice[] }>("GET", `/api/sessions/${id}/models`);
-      this.modelCache.set(agent, models);
+      if (models.length) this.modelCache.set(agent, models);
       return models;
     } catch {
       // Hubs before Codex support have no models endpoint; they take these names.

@@ -7,7 +7,7 @@
 // terminal UI attached to it; plain `codex` and the IDE extension run private servers.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { accessSync, constants, existsSync, realpathSync, rmSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fstatSync, openSync, readSync, realpathSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import { basename, join } from "node:path";
 import { Session } from "./sessions.mjs";
@@ -27,6 +27,46 @@ const clip = (s, n = 60) => {
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
 };
 const clipText = (s) => (s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) + "…" : s);
+
+/** Current context tokens from either an app-server usage object or a rollout record. */
+export function codexContextTokens(value) {
+  const usage = value?.last || value?.lastTokenUsage || value?.last_token_usage || value?.turn_token_usage || value?.usage;
+  const tokens = usage?.totalTokens ?? usage?.total_tokens;
+  return Number.isFinite(tokens) && tokens >= 0 ? tokens : null;
+}
+
+/** Restore the last usage count after a hub restart without loading a large rollout. */
+function contextFromRollout(path) {
+  if (!path || !existsSync(path)) return null;
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, 512 * 1024);
+    const buf = Buffer.alloc(length);
+    readSync(fd, buf, 0, length, size - length);
+    const lines = buf.toString("utf8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let record;
+      try {
+        record = JSON.parse(lines[i]);
+      } catch {
+        continue;
+      }
+      const tokens = record.type === "token_usage_record"
+        ? codexContextTokens(record.payload)
+        : record.type === "event_msg" && record.payload?.type === "token_count"
+          ? codexContextTokens(record.payload.info)
+          : null;
+      if (tokens !== null) return tokens;
+    }
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  return null;
+}
 
 // ---------- mapping Codex items to display items ----------
 
@@ -373,15 +413,28 @@ export class CodexBridge extends EventEmitter {
   }
 
   async onOpen() {
-    const init = await this.call("initialize", { clientInfo: { name: "glancecode", title: "GlanceCode", version: this.clientVersion }, capabilities: null });
+    const init = await this.call("initialize", {
+      clientInfo: { name: "glancecode", title: "Terminal HUD", version: this.clientVersion },
+      capabilities: { experimentalApi: true, requestAttestation: false },
+    });
     this.notify("initialized");
     this.ready = true;
     this.retryMs = 1000;
     this.log(`codex: connected (${/codex-tui\/(\S+)/.exec(init?.userAgent || "")?.[1] || "app-server"})`);
-    this.call("model/list", {})
-      .then((r) => (this.models = (r.data || []).filter((m) => !m.hidden).map((m) => ({ id: m.id, name: m.displayName || m.id, isDefault: m.isDefault }))))
-      .catch(() => {});
+    await this.loadModels().catch(() => {});
     await this.poll();
+  }
+
+  async loadModels() {
+    const r = await this.call("model/list", {});
+    this.models = (r.data || []).filter((m) => !m.hidden).map((m) => ({
+        id: m.id,
+        name: m.displayName || m.id,
+        isDefault: m.isDefault,
+        efforts: (m.supportedReasoningEfforts || []).map((e) => e.reasoningEffort).filter(Boolean),
+        defaultEffort: m.defaultReasoningEffort || null,
+      }));
+    return this.models;
   }
 
   call(method, params, timeoutMs = REQUEST_TIMEOUT_MS) {
@@ -502,10 +555,16 @@ export class CodexBridge extends EventEmitter {
     try {
       const r = await this.call("thread/resume", { threadId, excludeTurns: true });
       if (isHelperThread(r.thread)) {
+        await this.call("thread/unsubscribe", { threadId }).catch(() => {});
         j.attempts = 999; // never retry a helper
         return null;
       }
-      const s = this.adopt(r.thread, r.model);
+      if (!this.registry.allows(r.thread.cwd)) {
+        await this.call("thread/unsubscribe", { threadId }).catch(() => {});
+        j.attempts = 999; // never expose a thread outside the configured roots
+        return null;
+      }
+      const s = this.adopt(r.thread, r.model, r.reasoningEffort);
       this.joining.delete(threadId);
       await this.loadHistory(s).catch((err) => this.log(`codex: history for ${s.project}: ${err.message}`));
       return s;
@@ -518,7 +577,8 @@ export class CodexBridge extends EventEmitter {
   }
 
   /** Create or refresh the registry session for a thread. */
-  adopt(thread, model) {
+  adopt(thread, model, effort) {
+    if (!this.registry.allows(thread.cwd)) return null;
     let s = this.session(thread.id);
     const fresh = !s;
     if (!s) {
@@ -529,6 +589,8 @@ export class CodexBridge extends EventEmitter {
     s.project = basename(s.cwd || "") || "codex";
     s.title = thread.name || clip(thread.preview, 60) || s.title;
     s.model = model || thread.model || s.model;
+    s.effort = effort || thread.reasoningEffort || s.effort;
+    s.context ??= contextFromRollout(thread.path);
     s.codexJoined = true;
     s.lastActivity = Math.max(s.lastActivity || 0, (thread.updatedAt || 0) * 1000);
     this.applyStatus(s, thread.status);
@@ -580,7 +642,7 @@ export class CodexBridge extends EventEmitter {
     const s = p.threadId ? this.session(p.threadId) : null;
     switch (method) {
       case "thread/started":
-        if (!isHelperThread(p.thread) && !this.session(p.thread.id)) void this.join(p.thread.id, { force: true });
+        if (!isHelperThread(p.thread) && this.registry.allows(p.thread.cwd) && !this.session(p.thread.id)) void this.join(p.thread.id, { force: true });
         return;
       case "thread/status/changed":
         if (!s) {
@@ -606,8 +668,22 @@ export class CodexBridge extends EventEmitter {
         }
         return;
       case "thread/settings/updated":
-        if (s && p.threadSettings?.model) {
-          s.model = p.threadSettings.model;
+        if (s && p.threadSettings) {
+          if (p.threadSettings.model) {
+            s.model = p.threadSettings.model;
+            delete s.codexModel;
+          }
+          if (Object.hasOwn(p.threadSettings, "effort")) {
+            s.effort = p.threadSettings.effort || null;
+            delete s.codexEffort;
+          }
+          this.registry.changed(s);
+        }
+        return;
+      case "thread/tokenUsage/updated":
+        if (s) {
+          const used = codexContextTokens(p.tokenUsage);
+          if (used !== null) s.context = used;
           this.registry.changed(s);
         }
         return;
@@ -708,7 +784,6 @@ export class CodexBridge extends EventEmitter {
       return;
     }
     const params = { threadId: s.id, input: this.input(text) };
-    if (s.codexModel) params.model = s.codexModel;
     const r = await this.call("turn/start", params);
     s.codexTurnId = r?.turn?.id || s.codexTurnId;
     s.state = "working";
@@ -719,6 +794,22 @@ export class CodexBridge extends EventEmitter {
     await this.requireLive(s);
     if (!s.codexTurnId) return;
     await this.call("turn/interrupt", { threadId: s.id, turnId: s.codexTurnId });
+  }
+
+  /** Close the live glasses session while leaving the thread available in History. */
+  async end(s) {
+    await this.requireLive(s);
+    if (s.codexTurnId) await this.interrupt(s);
+    if (s.tmuxName) {
+      await tmuxCtl.tmux(null, ["kill-session", "-t", s.tmuxName]).catch((err) => this.log(`codex: close terminal: ${err.message}`));
+    }
+    await this.call("thread/unsubscribe", { threadId: s.id }).catch(() => {});
+    s.codexJoined = false;
+    s.state = "ended";
+    s.waiting = null;
+    s.activity = "";
+    s.lastActivity = Date.now();
+    this.registry.remove(s.id);
   }
 
   dialog(s) {
@@ -784,8 +875,22 @@ export class CodexBridge extends EventEmitter {
   async setModel(s, model) {
     await this.requireLive(s);
     if (this.models.length && !this.models.some((m) => m.id === model)) throw Object.assign(new Error(`unknown Codex model ${model}`), { status: 400 });
-    s.codexModel = model;
+    await this.call("thread/settings/update", { threadId: s.id, model });
+    delete s.codexModel;
     s.model = model;
+    this.registry.changed(s);
+  }
+
+  /** Applies from the next prompt and persists with the Codex thread. */
+  async setEffort(s, effort) {
+    await this.requireLive(s);
+    const model = this.models.find((m) => m.id === s.model);
+    if (model?.efforts?.length && !model.efforts.includes(effort)) {
+      throw Object.assign(new Error(`${model.name} efforts: ${model.efforts.join(", ")}`), { status: 400 });
+    }
+    await this.call("thread/settings/update", { threadId: s.id, effort });
+    delete s.codexEffort;
+    s.effort = effort;
     this.registry.changed(s);
   }
 
@@ -797,7 +902,7 @@ export class CodexBridge extends EventEmitter {
     const r = await this.call("thread/list", { limit: limit * 2, archived: false });
     const out = [];
     for (const t of r.data || []) {
-      if (isHelperThread(t) || liveIds.has(t.id) || !t.cwd || !existsSync(t.cwd)) continue;
+      if (isHelperThread(t) || liveIds.has(t.id) || !t.cwd || !existsSync(t.cwd) || !this.registry.allows(t.cwd)) continue;
       this.knownThreads.add(t.id);
       out.push({ id: t.id, cwd: t.cwd, project: basename(t.cwd), title: t.name || clip(t.preview, 60), mtime: (t.updatedAt || 0) * 1000, agent: "codex" });
       if (out.length >= limit) break;
@@ -810,22 +915,23 @@ export class CodexBridge extends EventEmitter {
   }
 
   /** A new session from the glasses. The terminal UI attaches after the first turn, once it can. */
-  async startSession({ cwd, prompt }) {
+  async startSession({ cwd, prompt, openTerminal = false }) {
     if (!this.ready) throw Object.assign(new Error("Codex isn't connected right now"), { status: 503 });
     const r = await this.call("thread/start", { cwd });
-    const s = this.adopt(r.thread, r.model);
+    const s = this.adopt(r.thread, r.model, r.reasoningEffort);
+    if (!s) throw Object.assign(new Error("that folder is outside this hub's allowed roots"), { status: 403 });
     s.origin = "glasses";
-    s.openTerminalAfterTurn = true;
+    s.openTerminalAfterTurn = openTerminal;
     if (prompt) await this.prompt(s, prompt);
     return s;
   }
 
-  async resumeSession({ id }) {
+  async resumeSession({ id, openTerminal = false }) {
     if (!this.ready) throw Object.assign(new Error("Codex isn't connected right now"), { status: 503 });
     const s = await this.join(id, { force: true });
     if (!s) throw Object.assign(new Error("couldn't open that Codex session"), { status: 502 });
     s.origin = "glasses";
-    await this.openTerminal(s).catch((err) => this.log(`codex: terminal for ${s.project}: ${err.message}`));
+    if (openTerminal) await this.openTerminal(s).catch((err) => this.log(`codex: terminal for ${s.project}: ${err.message}`));
     return s;
   }
 
@@ -835,6 +941,8 @@ export class CodexBridge extends EventEmitter {
     await tmuxCtl.tmux(null, ["new-session", "-d", "-s", name, "-c", s.cwd, "-x", "200", "-y", "50", "--", ...tmuxCtl.loginShellCommand(this.bin, remoteArgs(this.socket, ["resume", s.id], s.cwd))]);
     s.tmuxName = name;
     this.registry.changed(s);
-    this.log(`codex: terminal for ${s.project} in tmux session ${name}`);
+    const terminalApp = await tmuxCtl.openAttachedTerminal({ cwd: s.cwd, name });
+    this.log(`codex: terminal for ${s.project} in ${terminalApp === "orca" ? "Orca" : "Mac Terminal"} (${name})`);
+    return terminalApp;
   }
 }

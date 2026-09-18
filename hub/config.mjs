@@ -43,8 +43,9 @@ const DEFAULTS = {
   // macOS: hold the machine awake while the hub runs, so the glasses can reach it.
   // Only while plugged in; on battery the Mac still sleeps normally.
   preventSleep: true,
-  // Shane's private build only exposes Claude Code.
-  codex: false,
+  // Expose Codex when it is installed. Its bridge applies the same allowedRoots
+  // boundary as Claude before a thread can appear or be controlled.
+  codex: true,
   codexBin: "codex",
   gemini: false,
   geminiBin: "gemini",

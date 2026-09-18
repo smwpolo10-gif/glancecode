@@ -468,11 +468,11 @@ function agentOf(s: { agent?: Agent } | undefined): Agent {
 
 /** Project name, disambiguated when several sessions share a folder; every session names its agent when the hub runs more than one. */
 function sessionName(s: SessionSummary, all: SessionSummary[], showAgent: boolean): string {
-  const tag = showAgent ? ` · ${AGENT_NAME[agentOf(s)]}` : "";
+  const tag = showAgent ? `${AGENT_NAME[agentOf(s)]} · ` : "";
   const twins = all.filter((o) => o.project === s.project && agentOf(o) === agentOf(s));
-  if (twins.length < 2) return `${s.project}${tag}`;
-  if (s.tmuxName && s.tmuxName !== s.project) return `${s.tmuxName}${tag}`;
-  return `${s.project} ${s.id.slice(0, 4)}${tag}`;
+  if (twins.length < 2) return `${tag}${s.project}`;
+  if (s.tmuxName && s.tmuxName !== s.project) return `${tag}${s.tmuxName}`;
+  return `${tag}${s.project} ${s.id.slice(0, 4)}`;
 }
 
 function counts(sessions: SessionSummary[]): string {
@@ -575,7 +575,7 @@ class HomeScreen implements Screen {
     else if (a.type === "menu" && a.id === 7) this.app.hub.refresh();
     else if (a.type === "menu" && a.id === 9) {
       const r = rows[this.selected];
-      if (r?.kind === "session" && r.s.controllable) this.app.push(new EndSessionScreen(this.app, r.s.id, r.s.project, true));
+      if (r?.kind === "session" && r.s.controllable) this.app.push(new EndSessionScreen(this.app, r.s.id, r.s.project, agentOf(r.s), true));
     }
     else if (a.type === "tap") {
       const r = rows[this.selected];
@@ -606,11 +606,13 @@ class HomeScreen implements Screen {
 // ---------- session transcript ----------
 
 function sessionMenu(models: ModelChoice[], agent: Agent, controllable = false): MenuItem[] {
+  if (!controllable) return [{ id: 2, name: "Jump to latest" }, { id: 7, name: "Refresh" }];
+  const canChangeEffort = agent === "claude" || (agent === "codex" && models.some((m) => m.efforts?.length));
   return [
     ...(agent === "codex" ? [] : [{ id: 8, name: "Clear conversation" }]),
     ...(agent === "claude" ? [{ id: 5, name: "Resume" }] : []),
     ...(models.length ? [{ id: 3, name: "Switch Model" }] : []),
-    ...(agent === "claude" ? [{ id: 4, name: "Change effort" }] : []),
+    ...(canChangeEffort ? [{ id: 4, name: "Change effort" }] : []),
     { id: 1, name: "Interrupt" },
     { id: 2, name: "Jump to latest" },
     ...(controllable ? [{ id: 9, name: "End session" }] : []),
@@ -733,19 +735,24 @@ class SessionScreen implements Screen {
     const body = [...transcript.slice(Math.max(0, end - room), end), ...waitBlock].slice(-BODY_LINES);
 
     const activity = s.state === "working" && s.activity ? ` · ${s.activity}` : "";
-    const left = `${GLYPH[s.state]} ${s.project} · ${stateLabel(s)}${activity}`;
-    const rightParts = [];
-    if (this.scroll) rightParts.push(`↑${this.scroll}`);
-    if (!following && s.waiting) rightParts.push("◆ tap");
+    const left = `${GLYPH[s.state]} ${AGENT_NAME[agentOf(s)]} · ${s.project} · ${stateLabel(s)}${activity}`;
+    const rightCore = [];
+    if (this.scroll) rightCore.push(`↑${this.scroll}`);
+    if (!following && s.waiting) rightCore.push("◆ tap");
     const model = shortModel(s.model);
-    rightParts.push(s.controllable ? `${model}${s.effort ? ` · ${s.effort}` : ""}` : "view only");
+    rightCore.push(s.controllable ? `${model}${s.effort ? ` · ${s.effort}` : ""}` : "view only");
     const context = formatContext(s.context);
     const contextMode = this.app.settings.current.sessions.contextMode;
-    if (context && contextMode !== "off") rightParts.push(contextMode === "labeled" ? `ctx ${context}` : context);
+    if (context && contextMode !== "off") rightCore.push(contextMode === "labeled" ? `ctx ${context}` : context);
     const stamp = sessionStamp(this.app.settings.current);
-    if (this.app.settings.current.battery.transcript.visible) rightParts.push(this.app.batteryText() || "");
-    if (stamp) rightParts.push(stamp);
-    return { header: spread(left, rightParts.filter(Boolean).join("  "), HEADER_INNER_W), body, menu };
+    const rightOptional = [
+      this.app.settings.current.battery.transcript.visible ? this.app.batteryText() : "",
+      stamp,
+    ].filter(Boolean);
+    const minLeft = 180; // keep the agent and project visible before optional HUD metadata
+    while (rightOptional.length && width([...rightCore, ...rightOptional].join("  ")) > HEADER_INNER_W - minLeft - 12) rightOptional.pop();
+    const right = truncate([...rightCore, ...rightOptional].filter(Boolean).join("  "), HEADER_INNER_W - minLeft - 12);
+    return { header: spread(left, right, HEADER_INNER_W), body, menu };
   }
 
   async action(a: Action) {
@@ -782,21 +789,22 @@ class SessionScreen implements Screen {
       case "menu":
         if (a.id === 2) this.scroll = 0;
         else if (a.id === 7) this.app.hub.refresh();
-        else if (a.id === 1) {
+        else if (a.id === 1 && s?.controllable) {
           await this.app.hub.interrupt(this.id);
           this.app.toast("Interrupted");
-        } else if (a.id === 6) {
+        } else if (a.id === 6 && s?.controllable) {
           await this.app.hub.command(this.id, "/compact");
           this.app.toast("Compacting");
-        } else if (a.id === 8 && agentOf(s) !== "codex") {
+        } else if (a.id === 8 && s?.controllable && agentOf(s) !== "codex") {
           this.app.push(new ClearConversationScreen(this.app, this.id, s?.project || "this session"));
         } else if (a.id === 9 && s?.controllable) {
-          this.app.push(new EndSessionScreen(this.app, this.id, s.project));
-        } else if (a.id === 3 && this.models.length) {
+          this.app.push(new EndSessionScreen(this.app, this.id, s.project, agentOf(s)));
+        } else if (a.id === 3 && s?.controllable && this.models.length) {
           this.app.push(new ModelPicker(this.app, this.id, this.models, agentOf(s)));
-        } else if (a.id === 4 && agentOf(s) === "claude") {
-          this.app.push(new EffortPicker(this.app, this.id, s?.effort || ""));
-        } else if (a.id === 5 && agentOf(s) === "claude") {
+        } else if (a.id === 4 && s?.controllable && agentOf(s) !== "gemini") {
+          const levels = effortLevels(this.models, agentOf(s), s?.model);
+          this.app.push(new EffortPicker(this.app, this.id, s?.effort || "", "", "Effort", levels));
+        } else if (a.id === 5 && s?.controllable && agentOf(s) === "claude") {
           await this.app.hub.prompt(this.id, "/resume");
           this.app.toast("Sent /resume");
         }
@@ -814,12 +822,19 @@ class SessionScreen implements Screen {
       if (current?.waiting?.kind === "question") {
         await this.app.hub.answer(this.id, text);
       } else if (command === "/resume") {
-        await this.app.hub.prompt(this.id, command);
-        this.app.toast("Sent /resume");
+        if (agentOf(current) === "claude") {
+          await this.app.hub.prompt(this.id, command);
+          this.app.toast("Sent /resume");
+        } else this.app.toast("/resume is Claude-only");
       } else if (command === "/effort") {
-        this.app.push(new EffortPicker(this.app, this.id, current?.effort || ""));
+        const levels = effortLevels(this.models, agentOf(current), current?.model);
+        if (levels.length) this.app.push(new EffortPicker(this.app, this.id, current?.effort || "", "", "Effort", levels));
+        else this.app.toast("Effort choices are not available yet");
       } else if (command === "/clear") {
-        this.app.push(new ClearConversationScreen(this.app, this.id, current?.project || "this session"));
+        if (agentOf(current) === "claude") this.app.push(new ClearConversationScreen(this.app, this.id, current?.project || "this session"));
+        else this.app.toast("Use New session for a fresh Codex conversation");
+      } else if (agentOf(current) === "codex" && /^\/(?:model|context|cost)\b/.test(command || "")) {
+        this.app.toast(`${command!.split(" ")[0]} is Claude-only here`);
       } else if (command) {
         await this.app.hub.command(this.id, command);
         this.app.toast(`Sent ${command}`);
@@ -832,13 +847,13 @@ class SessionScreen implements Screen {
 }
 
 class EndSessionScreen implements Screen {
-  constructor(private app: App, private id: string, private project: string, private fromList = false) {}
+  constructor(private app: App, private id: string, private project: string, private agent: Agent, private fromList = false) {}
 
   frame(): Frame {
     return {
       header: "End session?",
       body: wrap(
-        `This stops Claude in ${this.project}. Any attached computer terminal returns to its shell.\n\nTap to end · double-tap to cancel`,
+        `This stops ${AGENT_NAME[this.agent]} in ${this.project}. Any attached computer terminal returns to its shell.\n\nTap to end · double-tap to cancel`,
         BODY_INNER_W,
       ),
     };
@@ -939,9 +954,9 @@ abstract class Picker implements Screen {
 async function startSession(app: App, p: RecentProject, agent: Agent) {
   app.toast(`Starting ${AGENT_NAME[agent]} in ${p.project}…`, 15000);
   const requestedTerminal = app.settings.current.openTerminalOnLaunch;
-  const { session, terminalOpened, terminalApp } = await app.hub.launch(p.cwd, undefined, agent, requestedTerminal);
+  const { session, terminalOpened, terminalPending, terminalApp } = await app.hub.launch(p.cwd, undefined, agent, requestedTerminal);
   app.hub.sessions.set(session.id, session);
-  const where = terminalOpened ? ` + ${terminalApp === "orca" ? "Orca" : "Mac Terminal"}` : requestedTerminal ? " (headless; Mac window did not open)" : "";
+  const where = terminalOpened ? ` + ${terminalApp === "orca" ? "Orca" : "Mac Terminal"}` : terminalPending ? " · Mac terminal requested after the first reply" : requestedTerminal ? " (headless; Mac window did not open)" : "";
   app.toast(`Started ${p.project}${where}. Hold to talk.`, 4500);
   app.replace(new SessionScreen(app, session.id));
 }
@@ -1004,12 +1019,10 @@ class ModelPicker extends Picker {
       run: async () => {
         await this.app.hub.command(this.id, `/model ${model.id}`);
         this.app.pop();
-        if (this.agent === "codex") {
-          this.app.toast(`${model.name} from your next message`);
-        } else {
-          const suggested = /opus/i.test(model.id) ? "xhigh" : "high";
-          this.app.push(new EffortPicker(this.app, this.id, "", suggested, `${model.name} effort`));
-        }
+        const suggested = this.agent === "codex" ? model.defaultEffort || "" : /opus/i.test(model.id) ? "xhigh" : "high";
+        const levels = this.agent === "codex" ? model.efforts || [] : [...EFFORT_LEVELS];
+        if (levels.length) this.app.push(new EffortPicker(this.app, this.id, "", suggested, `${model.name} effort`, levels));
+        else this.app.toast(`${model.name} from your next message`);
       },
     }));
   }
@@ -1017,16 +1030,23 @@ class ModelPicker extends Picker {
 
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
+function effortLevels(models: ModelChoice[], agent: Agent, modelName: string | null | undefined): readonly string[] {
+  if (agent === "claude") return EFFORT_LEVELS;
+  if (agent !== "codex") return [];
+  const exact = models.find((m) => m.id === modelName || m.name === modelName);
+  return exact?.efforts?.length ? exact.efforts : [...new Set(models.flatMap((m) => m.efforts || []))];
+}
+
 class EffortPicker extends Picker {
-  constructor(app: App, private id: string, private current: string, private suggested = "", title = "Effort") {
+  constructor(app: App, private id: string, private current: string, private suggested = "", title = "Effort", private levels: readonly string[] = EFFORT_LEVELS) {
     super(app, title);
     const preferred = suggested || current;
-    const index = EFFORT_LEVELS.indexOf(preferred as (typeof EFFORT_LEVELS)[number]);
+    const index = this.levels.indexOf(preferred);
     if (index >= 0) this.selected = index;
   }
 
   async load() {
-    return EFFORT_LEVELS.map((effort) => ({
+    return this.levels.map((effort) => ({
       label: effort,
       right: effort === this.current ? "current" : effort === this.suggested ? "default" : "",
       run: async () => {

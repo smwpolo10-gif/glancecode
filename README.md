@@ -120,8 +120,9 @@ Sessions started any other way still appear on the glasses, marked view only.
 
 This private fork passes `--dangerously-skip-permissions` to Claude sessions
 started or resumed from the glasses. Treat the pairing token as equivalent to
-control of the logged-in macOS account. Codex and Gemini integrations are off
-in this build so the hub only reads and controls Claude Code.
+control of the logged-in macOS account. Codex is enabled when its CLI is
+installed; Gemini remains off in this build. Both Claude and Codex are restricted
+to the folders listed in `allowedRoots`.
 
 Gemini CLI is the same:
 
@@ -207,9 +208,9 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability and
 | `ntfyTopic` | empty | optional phone push through ntfy when a session finishes or needs you |
 | `bindTailscaleIP` | false | also listen on the raw Tailscale IP over plain HTTP, for development |
 | `preventSleep` | true | macOS: keep the Mac awake while plugged in, so the glasses can reach it |
-| `codex` | `"auto"` | follow Codex sessions when the Codex CLI is installed; `false` turns it off |
+| `codex` | `true` | follow Codex sessions when the Codex CLI is installed; `false` turns it off |
 | `codexBin` | `codex` | the Codex command, or a full path to it |
-| `gemini` | `"auto"` | follow Gemini CLI sessions when it's installed; `false` turns it off |
+| `gemini` | `false` | follow Gemini CLI sessions when it's installed; `true` turns it on |
 | `geminiBin` | `gemini` | the Gemini CLI command, or a full path to it |
 | `geminiArgs` | `[]` | extra arguments for Gemini sessions started from the glasses |
 | `defaultAgent` | `claude` | what New session starts on glasses app versions that don't ask |

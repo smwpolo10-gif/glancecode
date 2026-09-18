@@ -325,17 +325,19 @@ export function startHub({ quiet = false, feed = true } = {}) {
       if (launchAgent(body) === "codex") {
         if (!codex) throw new HttpError(503, "Codex support is off on this hub");
         if (body.resume) {
+          if (!codex.isCodexThread(body.resume)) throw new HttpError(403, "that Codex session is outside this hub's allowed history");
           const live = registry.sessions.get(body.resume);
           if (live && live.state !== "ended") throw new HttpError(409, "that session is already open");
-          const session = await codex.resumeSession({ id: body.resume });
+          const session = await codex.resumeSession({ id: body.resume, openTerminal: body.openTerminal === true });
           if (body.prompt) await codex.prompt(session, body.prompt);
           log(`codex: resumed ${session.project} (${session.id.slice(0, 8)})`);
           return send(res, 200, { session: session.summaryJSON() });
         }
         if (!body.cwd || !existsSync(body.cwd) || !statSync(body.cwd).isDirectory()) throw new HttpError(400, "cwd must be an existing folder");
-        const session = await codex.startSession({ cwd: body.cwd, prompt: body.prompt });
+        if (!registry.allows(body.cwd)) throw new HttpError(403, "that folder is outside this hub's allowed roots");
+        const session = await codex.startSession({ cwd: body.cwd, prompt: body.prompt, openTerminal: body.openTerminal === true });
         log(`codex: started ${session.project} from the glasses`);
-        return send(res, 200, { session: session.summaryJSON() });
+        return send(res, 200, { session: session.summaryJSON(), terminalPending: body.openTerminal === true });
       }
       const agent = launchAgent(body);
       const { name, target } = await launch({ ...body, agent });
@@ -366,12 +368,20 @@ export function startHub({ quiet = false, feed = true } = {}) {
         return send(res, 200, { seq, session: s.summaryJSON(), items: s.items.slice(-limit) });
       }
       if (method === "GET" && action === "models") {
-        if (codexFor(s)) return send(res, 200, { models: codex.models });
+        const cx = codexFor(s);
+        if (cx) {
+          if (!cx.models.length) await cx.loadModels().catch(() => {});
+          return send(res, 200, { models: cx.models });
+        }
         // Gemini switches models through an interactive picker, so the glasses don't offer it.
         return send(res, 200, { models: s.agent === "gemini" ? [] : CLAUDE_MODELS });
       }
       if (method === "POST" && action === "end") {
-        if (s.agent === "codex") throw new HttpError(409, "ending Codex sessions is not supported by this hub");
+        if (s.agent === "codex") {
+          await codex.end(s);
+          log(`ended ${s.project} (${s.id.slice(0, 8)}) Codex session`);
+          return send(res, 200, { ok: true });
+        }
         const target = controllable(s);
         await tmuxCtl.terminateSession(target);
         s.tmux = null;
@@ -529,6 +539,12 @@ export function startHub({ quiet = false, feed = true } = {}) {
         return send(res, 200, { ok: true });
       }
       if (model) throw new HttpError(400, `Codex models: ${codex.models.map((m) => m.id).join(", ") || "none listed yet"}`);
+      const effort = /^\/effort ([\w-]+)$/.exec(String(command))?.[1];
+      if (effort) {
+        await run(() => codex.setEffort(s, effort));
+        log(`→ ${s.project} (codex): effort ${effort} from the next prompt`);
+        return send(res, 200, { ok: true });
+      }
       throw new HttpError(400, "command not allowed");
     }
     throw new HttpError(404, "not found");

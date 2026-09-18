@@ -2,7 +2,7 @@
 export const BRAND = {
   name: "glancecode", // CLI command, npm package, config and data folder names
   displayName: "Terminal HUD", // User-facing product name (20 chars max)
-  tagline: "Claude Code sessions on your Even Realities G2 glasses",
+  tagline: "Claude Code and Codex sessions on your Even Realities G2 glasses",
   tmuxSocket: "glancecode", // dedicated tmux server: tmux -L glancecode
   serviceLabel: "dev.glancecode.hub", // launchd label
   envPrefix: "GLANCECODE", // GLANCECODE_CONFIG_DIR, GLANCECODE_HOOK_PORT, ...
