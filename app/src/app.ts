@@ -585,7 +585,7 @@ function sessionMenu(models: ModelChoice[], agent: Agent, controllable = false):
   return [
     { id: 1, name: "Interrupt" },
     { id: 2, name: "Jump to latest" },
-    ...(models.length ? [{ id: 3, name: "Change model" }] : []),
+    ...(models.length ? [{ id: 3, name: "Switch Model" }] : []),
     ...(agent === "claude" ? [{ id: 4, name: "Change effort" }] : []),
     { id: 6, name: "Compact" },
     ...(agent === "claude" ? [{ id: 5, name: "Resume" }] : []),
@@ -976,7 +976,12 @@ class ModelPicker extends Picker {
       run: async () => {
         await this.app.hub.command(this.id, `/model ${model.id}`);
         this.app.pop();
-        this.app.toast(this.agent === "codex" ? `${model.name} from your next message` : `Switched to ${model.name}`);
+        if (this.agent === "codex") {
+          this.app.toast(`${model.name} from your next message`);
+        } else {
+          const suggested = /opus/i.test(model.id) ? "xhigh" : "high";
+          this.app.push(new EffortPicker(this.app, this.id, "", suggested, `${model.name} effort`));
+        }
       },
     }));
   }
@@ -985,14 +990,17 @@ class ModelPicker extends Picker {
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 class EffortPicker extends Picker {
-  constructor(app: App, private id: string, private current: string) {
-    super(app, "Effort");
+  constructor(app: App, private id: string, private current: string, private suggested = "", title = "Effort") {
+    super(app, title);
+    const preferred = suggested || current;
+    const index = EFFORT_LEVELS.indexOf(preferred as (typeof EFFORT_LEVELS)[number]);
+    if (index >= 0) this.selected = index;
   }
 
   async load() {
     return EFFORT_LEVELS.map((effort) => ({
       label: effort,
-      right: effort === this.current ? "current" : "",
+      right: effort === this.current ? "current" : effort === this.suggested ? "default" : "",
       run: async () => {
         await this.app.hub.command(this.id, `/effort ${effort}`);
         this.app.pop();

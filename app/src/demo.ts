@@ -214,9 +214,10 @@ export class DemoHub extends Hub {
           { id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
         ]
       : [
-          { id: "opus", name: "Opus" },
+          { id: "fable", name: "Fable 5.1" },
+          { id: "claude-fable-5", name: "Fable 5" },
+          { id: "opus", name: "Opus 5" },
           { id: "sonnet", name: "Sonnet" },
-          { id: "haiku", name: "Haiku" },
         ];
   }
 

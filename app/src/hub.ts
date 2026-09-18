@@ -10,10 +10,10 @@ export interface HubConfig {
 type Listener = () => void;
 
 const DEFAULT_CLAUDE_MODELS: ModelChoice[] = [
-  { id: "opus", name: "Opus" },
+  { id: "fable", name: "Fable 5.1" },
+  { id: "claude-fable-5", name: "Fable 5" },
+  { id: "opus", name: "Opus 5" },
   { id: "sonnet", name: "Sonnet" },
-  { id: "fable", name: "Fable" },
-  { id: "haiku", name: "Haiku" },
 ];
 
 export class Hub {

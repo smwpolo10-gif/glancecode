@@ -22,11 +22,12 @@ const EVENT_BUFFER = 3000;
 const PKG_VERSION = JSON.parse(readFileSync(resolve(HERE, "..", "package.json"), "utf8")).version;
 // What the glasses menu offers for Claude sessions; Codex lists its own.
 const CLAUDE_MODELS = [
-  { id: "opus", name: "Opus" },
+  { id: "fable", name: "Fable 5.1" },
+  { id: "claude-fable-5", name: "Fable 5" },
+  { id: "opus", name: "Opus 5" },
   { id: "sonnet", name: "Sonnet" },
-  { id: "fable", name: "Fable" },
-  { id: "haiku", name: "Haiku" },
 ];
+const CLAUDE_MODEL_IDS = new Set([...CLAUDE_MODELS.map((model) => model.id), "haiku"]);
 const AGENT_LABEL = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json", ".ico": "image/x-icon" };
 
@@ -436,10 +437,13 @@ export function startHub({ quiet = false, feed = true } = {}) {
           log(`→ ${s.project} (gemini): ${geminiCommand}`);
           return send(res, 200, { ok: true });
         }
-        const allowed = /^\/(model (opus|sonnet|haiku|fable)(\[1m\])?|effort (low|medium|high|xhigh|max)|compact|clear|cost|context)$/;
-        if (!allowed.test(String(command))) throw new HttpError(400, "command not allowed");
+        const value = String(command);
+        const requestedModel = /^\/model (\S+)$/.exec(value)?.[1];
+        const bareModel = requestedModel?.replace(/\[1m\]$/, "");
+        const allowed = /^\/(effort (low|medium|high|xhigh|max)|compact|clear|cost|context)$/;
+        if (!(bareModel && CLAUDE_MODEL_IDS.has(bareModel)) && !allowed.test(value)) throw new HttpError(400, "command not allowed");
         await refuseIfDialog(s);
-        const model = /^\/model (\S+)$/.exec(command)?.[1];
+        const model = requestedModel;
         if (model) {
           const withWindow = !model.startsWith("haiku") && (/\[1m\]$/.test(model) || (s.context || 0) > 150_000) ? model.replace(/(\[1m\])?$/, "[1m]") : model;
           await tmuxCtl.switchModel(controllable(s), withWindow, join(homedir(), ".claude", "settings.json"));
