@@ -740,7 +740,8 @@ class SessionScreen implements Screen {
     const model = shortModel(s.model);
     rightParts.push(s.controllable ? `${model}${s.effort ? ` · ${s.effort}` : ""}` : "view only");
     const context = formatContext(s.context);
-    if (this.app.settings.current.sessions.showContext && context) rightParts.push(`ctx ${context}`);
+    const contextMode = this.app.settings.current.sessions.contextMode;
+    if (context && contextMode !== "off") rightParts.push(contextMode === "labeled" ? `ctx ${context}` : context);
     const stamp = sessionStamp(this.app.settings.current);
     if (this.app.settings.current.battery.transcript.visible) rightParts.push(this.app.batteryText() || "");
     if (stamp) rightParts.push(stamp);

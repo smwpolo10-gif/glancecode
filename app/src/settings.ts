@@ -20,6 +20,7 @@ export type BellPlacement = "before" | "after" | "opposite-corner";
 export type BannerDurationSeconds = 0 | 5 | 10 | 30 | 60;
 export type BreakLabel = "off" | "b" | "break";
 export type BatteryFormat = "percent" | "label";
+export type ContextMode = "off" | "number" | "labeled";
 
 export interface WidgetPlacement {
   position: GridCell;
@@ -67,7 +68,7 @@ export interface TerminalHudSettings {
   sessions: {
     showTime: boolean;
     showDate: boolean;
-    showContext: boolean;
+    contextMode: ContextMode;
     showHistory: boolean;
   };
   openTerminalOnLaunch: boolean;
@@ -128,7 +129,7 @@ export const DEFAULT_SETTINGS: TerminalHudSettings = {
   sessions: {
     showTime: true,
     showDate: false,
-    showContext: true,
+    contextMode: "number",
     showHistory: true,
   },
   openTerminalOnLaunch: true,
@@ -146,6 +147,7 @@ const BELL_PLACEMENTS = new Set<BellPlacement>(["before", "after", "opposite-cor
 const BANNER_DURATIONS = new Set<BannerDurationSeconds>([0, 5, 10, 30, 60]);
 const BREAK_LABELS = new Set<BreakLabel>(["off", "b", "break"]);
 const BATTERY_FORMATS = new Set<BatteryFormat>(["percent", "label"]);
+const CONTEXT_MODES = new Set<ContextMode>(["off", "number", "labeled"]);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -246,7 +248,11 @@ export function normalizeSettings(value: unknown): TerminalHudSettings {
     sessions: {
       showTime: bool(sessions.showTime, d.sessions.showTime),
       showDate: bool(sessions.showDate, d.sessions.showDate),
-      showContext: bool(sessions.showContext, d.sessions.showContext),
+      contextMode: oneOf(
+        sessions.contextMode,
+        CONTEXT_MODES,
+        sessions.showContext === false ? "off" : d.sessions.contextMode,
+      ),
       showHistory: bool(sessions.showHistory, d.sessions.showHistory),
     },
     openTerminalOnLaunch: bool(root.openTerminalOnLaunch, d.openTerminalOnLaunch),

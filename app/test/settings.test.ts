@@ -32,7 +32,7 @@ test("defaults match the personal Terminal HUD setup", () => {
   assert.equal(settings.battery.pomodoro.visible, false);
   assert.equal(settings.battery.sessions.visible, false);
   assert.equal(settings.battery.transcript.visible, false);
-  assert.equal(settings.sessions.showContext, true);
+  assert.equal(settings.sessions.contextMode, "number");
   assert.equal(settings.openTerminalOnLaunch, true);
 });
 
@@ -108,6 +108,12 @@ test("old completion settings migrate without re-enabling disabled alerts", () =
   assert.equal(disabled.completion.clockMode, "off");
   assert.equal(disabled.completion.pomodoroMode, "off");
   assert.equal(disabled.completion.bannerDurationSeconds, 30);
+});
+
+test("old context visibility setting migrates to the new display mode", () => {
+  assert.equal(normalizeSettings({ sessions: { showContext: false } }).sessions.contextMode, "off");
+  assert.equal(normalizeSettings({ sessions: { showContext: true } }).sessions.contextMode, "number");
+  assert.equal(normalizeSettings({ sessions: { contextMode: "labeled" } }).sessions.contextMode, "labeled");
 });
 
 test("store survives corrupt JSON, deep-merges patches, publishes and persists", async () => {

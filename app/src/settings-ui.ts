@@ -118,7 +118,7 @@ function readForm(): TerminalHudSettings {
     sessions: {
       showTime: checked("sessions-time"),
       showDate: checked("sessions-date"),
-      showContext: checked("sessions-context"),
+      contextMode: value("sessions-context-mode"),
       showHistory: checked("sessions-history"),
     },
     openTerminalOnLaunch: checked("open-terminal"),
@@ -164,7 +164,7 @@ function assignForm(settings: TerminalHudSettings) {
   byId<HTMLInputElement>("battery-transcript-visible").checked = settings.battery.transcript.visible;
   byId<HTMLInputElement>("sessions-time").checked = settings.sessions.showTime;
   byId<HTMLInputElement>("sessions-date").checked = settings.sessions.showDate;
-  byId<HTMLInputElement>("sessions-context").checked = settings.sessions.showContext;
+  byId<HTMLSelectElement>("sessions-context-mode").value = settings.sessions.contextMode;
   byId<HTMLInputElement>("sessions-history").checked = settings.sessions.showHistory;
   byId<HTMLInputElement>("open-terminal").checked = settings.openTerminalOnLaunch;
   byId<HTMLInputElement>("clock-period").disabled = settings.hud.clock.hourCycle === "h24";
