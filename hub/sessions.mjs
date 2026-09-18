@@ -427,7 +427,7 @@ export class Registry extends EventEmitter {
             s.effort = effort;
             changed = true;
           }
-          if (model && !s.model) {
+          if (model && model !== s.model) {
             s.model = model;
             changed = true;
           }

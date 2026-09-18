@@ -211,9 +211,11 @@ export async function switchModel(target, model, settingsPath) {
   await sendPrompt(target, `/model ${model}`);
   const until = Date.now() + 4000;
   let confirmed = false;
+  let activeModel = null;
   while (Date.now() < until) {
     await sleep(300);
     const screen = await capture(target, 30);
+    activeModel = readClaudeModel(screen) || activeModel;
     const m = /(\d+)\.\s+Yes, switch to/.exec(screen);
     if (m && !confirmed) {
       await sendKey(target, m[1]);
@@ -223,6 +225,7 @@ export async function switchModel(target, model, settingsPath) {
     if (/Set model to/.test(screen.split("\n").slice(-12).join("\n"))) break;
   }
   await sleep(300);
+  activeModel = readClaudeModel(await capture(target, 20)) || activeModel;
   const after = readModel();
   if (after !== before) {
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
@@ -230,7 +233,7 @@ export async function switchModel(target, model, settingsPath) {
     else settings.model = before;
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
-  return { restoredDefault: after !== before ? before ?? null : null };
+  return { restoredDefault: after !== before ? before ?? null : null, activeModel };
 }
 
 /** Change this session's effort while restoring the user's default afterward. */
@@ -246,10 +249,14 @@ export async function switchEffort(target, effort, settingsPath) {
   const before = readDefault();
   await sendPrompt(target, `/effort ${effort}`);
   const until = Date.now() + 4000;
+  let activeEffort = null;
   while (Date.now() < until) {
     await sleep(250);
-    if (/Set effort level to/i.test((await capture(target, 20)).split("\n").slice(-12).join("\n"))) break;
+    const screen = await capture(target, 20);
+    activeEffort = readEffort(screen) || activeEffort;
+    if (/Set effort level to/i.test(screen.split("\n").slice(-12).join("\n"))) break;
   }
+  activeEffort = readEffort(await capture(target, 20)) || activeEffort;
   const after = readDefault();
   if (after !== before) {
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
@@ -257,7 +264,7 @@ export async function switchEffort(target, effort, settingsPath) {
     else settings.effortLevel = before;
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
-  return { restoredDefault: after !== before ? before ?? null : null };
+  return { restoredDefault: after !== before ? before ?? null : null, activeEffort };
 }
 
 /** Answer a question with free text via its "Type something" option. */

@@ -446,13 +446,17 @@ export function startHub({ quiet = false, feed = true } = {}) {
         const model = requestedModel;
         if (model) {
           const withWindow = !model.startsWith("haiku") && (/\[1m\]$/.test(model) || (s.context || 0) > 150_000) ? model.replace(/(\[1m\])?$/, "[1m]") : model;
-          await tmuxCtl.switchModel(controllable(s), withWindow, join(homedir(), ".claude", "settings.json"));
+          const { activeModel } = await tmuxCtl.switchModel(controllable(s), withWindow, join(homedir(), ".claude", "settings.json"));
+          s.model = activeModel || CLAUDE_MODELS.find((choice) => choice.id === bareModel)?.name || bareModel;
+          registry.changed(s);
           log(`→ ${s.project}: /model ${withWindow} (default left unchanged)`);
           return send(res, 200, { ok: true });
         }
         const effort = /^\/effort (low|medium|high|xhigh|max)$/.exec(command)?.[1];
         if (effort) {
-          await tmuxCtl.switchEffort(controllable(s), effort, join(homedir(), ".claude", "settings.json"));
+          const { activeEffort } = await tmuxCtl.switchEffort(controllable(s), effort, join(homedir(), ".claude", "settings.json"));
+          s.effort = activeEffort || effort;
+          registry.changed(s);
           log(`→ ${s.project}: /effort ${effort} (default left unchanged)`);
           return send(res, 200, { ok: true });
         }
