@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { TMUX_CONF, TMUX_SOCKET_NAME } from "./config.mjs";
+import { BRAND } from "./brand.mjs";
 import { readGeminiDialog } from "./gemini.mjs";
 
 const run = promisify(execFile);
@@ -95,6 +96,12 @@ export async function paneAlive(target) {
   }
 }
 
+/** End the process hosted by one pane. A generated one-pane tmux session then exits too. */
+export async function terminateSession(target) {
+  if (!target?.pane) throw new Error("tmux pane required");
+  await tmux(target.socket, ["kill-pane", "-t", target.pane]);
+}
+
 export async function capture(target, lines = 60) {
   const out = await tmux(target.socket, ["capture-pane", "-p", "-J", "-t", target.pane, "-S", `-${lines}`]);
   return out.replace(/\s+$/gm, "");
@@ -129,11 +136,16 @@ export function readEffort(screen) {
   return match ? match[1].toLowerCase() : null;
 }
 
-/** Read the model label from Claude Code's startup banner before a transcript exists. */
+/** Read Claude Code's displayed model label without assuming today's model names. */
 export function readClaudeModel(screen) {
-  const match = /\b(opus|sonnet|haiku|fable)\s+(\d+(?:\.\d+)?)\s+\([^)]*context\)\s+with\s+[a-z][a-z-]*\s+effort\b/i.exec(String(screen || ""));
-  if (!match) return null;
-  return `${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()} ${match[2]}`;
+  for (const raw of String(screen || "").split("\n")) {
+    const line = raw.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+    const match = /(.+?)\s+\([^)]*\bcontext\)\s+with\s+[a-z][a-z-]*\s+effort\b/i.exec(line);
+    if (!match) continue;
+    const label = match[1].trim().replace(/^[^A-Za-z0-9]+/, "").replace(/^model:\s*/i, "").trim();
+    if (label && label.length <= 80 && /[A-Za-z]/.test(label)) return label;
+  }
+  return null;
 }
 
 /**
@@ -237,6 +249,52 @@ export function sessionNameFor(cwd, taken) {
   let name = base;
   for (let n = 2; taken.has(name); n++) name = `${base}-${n}`;
   return name;
+}
+
+/** The command a visible desktop terminal uses to join the already-running session. */
+export function terminalAttachCommand(name) {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(name))) throw new Error("unsafe tmux session name");
+  return `${BRAND.name} attach ${name}`;
+}
+
+/**
+ * Open a visible macOS terminal attached to the same tmux session. Orca gets first
+ * choice for its registered worktrees; Terminal.app is the general fallback.
+ * Launch remains useful when neither UI can open, so callers treat errors as best-effort.
+ * @returns {Promise<"orca"|"terminal">}
+ */
+export async function openAttachedTerminal({ cwd, name }) {
+  if (process.platform !== "darwin") throw new Error("visible terminal opening is only available on macOS");
+  const command = terminalAttachCommand(name);
+  let orcaError = null;
+  for (const bin of ["/opt/homebrew/bin/orca", "/usr/local/bin/orca"]) {
+    if (!existsSync(bin)) continue;
+    try {
+      await run(bin, ["terminal", "create", "--worktree", `path:${cwd}`, "--title", name, "--command", command, "--focus", "--json"], { timeout: 10_000 });
+      return "orca";
+    } catch (err) {
+      orcaError = err;
+      break;
+    }
+  }
+
+  // Pass the command as AppleScript argv rather than interpolating it into the
+  // script. `name` was restricted above to tmux's generated safe alphabet.
+  const script = [
+    "on run argv",
+    '  tell application "Terminal"',
+    "    do script ((item 1 of argv) & \"; exit\")",
+    "    activate",
+    "  end tell",
+    "end run",
+  ].join("\n");
+  try {
+    await run("osascript", ["-e", script, command], { timeout: 10_000 });
+    return "terminal";
+  } catch (err) {
+    const why = [orcaError, err].filter(Boolean).map((e) => e.message).join("; ");
+    throw new Error(`could not open Orca or Terminal.app${why ? `: ${why}` : ""}`);
+  }
 }
 
 export async function listOurSessions() {

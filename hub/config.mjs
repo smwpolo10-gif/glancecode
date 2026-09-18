@@ -35,7 +35,7 @@ const DEFAULTS = {
   ntfyTopic: "",
   ntfyServer: "https://ntfy.sh",
   // Shane's private build keeps the same permission mode he uses at the Mac.
-  // This only affects sessions explicitly started or resumed through GlanceCode.
+  // This only affects sessions explicitly started or resumed through Terminal HUD.
   claudeArgs: ["--dangerously-skip-permissions"],
   // Empty in upstream. This private build's config restricts the hub to its
   // disposable test project so hooks from normal sessions are ignored.

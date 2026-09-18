@@ -1,5 +1,5 @@
 // Client for the glancecode hub: REST calls plus a replaying event stream.
-import type { Agent, HubEvent, Item, ModelChoice, RecentProject, RecentSession, SessionSummary } from "./types.ts";
+import type { Agent, FinishedEvent, HubEvent, Item, ModelChoice, RecentProject, RecentSession, SessionSummary } from "./types.ts";
 import { every } from "./timers.ts";
 
 export interface HubConfig {
@@ -19,6 +19,8 @@ const DEFAULT_CLAUDE_MODELS: ModelChoice[] = [
 export class Hub {
   sessions = new Map<string, SessionSummary>();
   items = new Map<string, Item[]>();
+  /** Completion events retained for the ambient HUD, oldest first. */
+  finished: FinishedEvent[] = [];
   /** Agents the hub can start. Older hubs don't say, and only run Claude Code. */
   agents: Agent[] = ["claude"];
   private modelCache = new Map<string, ModelChoice[]>();
@@ -183,6 +185,11 @@ export class Hub {
         for (const it of ev.items) if (!keys.has(it.key)) list.push(it);
         if (list.length > 400) list.splice(0, list.length - 400);
       }
+    } else if (ev.type === "finished") {
+      if (!this.finished.some((f) => f.id === ev.id && f.at === ev.at)) {
+        this.finished.push({ id: ev.id, project: ev.project, message: ev.message, at: ev.at });
+        if (this.finished.length > 50) this.finished.splice(0, this.finished.length - 50);
+      }
     } else if (ev.type === "resync") {
       this.refresh();
       return;
@@ -223,6 +230,9 @@ export class Hub {
   interrupt(id: string) {
     return this.req("POST", `/api/sessions/${id}/interrupt`, {});
   }
+  end(id: string) {
+    return this.req<{ ok: boolean }>("POST", `/api/sessions/${id}/end`, {});
+  }
   choose(id: string, kind: "permission" | "question", index: number) {
     return this.req<{ chosen: string }>("POST", `/api/sessions/${id}/choose`, { kind, index });
   }
@@ -238,8 +248,8 @@ export class Hub {
   recent() {
     return this.req<{ agents?: Agent[]; projects: RecentProject[]; sessions: RecentSession[] }>("GET", "/api/recent");
   }
-  launch(cwd: string, resume?: string, agent?: Agent) {
-    return this.req<{ session: SessionSummary }>("POST", "/api/sessions", { cwd, resume, agent });
+  launch(cwd: string, resume?: string, agent?: Agent, openTerminal = false) {
+    return this.req<{ session: SessionSummary; terminalOpened?: boolean; terminalApp?: "orca" | "terminal" | null }>("POST", "/api/sessions", { cwd, resume, agent, openTerminal });
   }
   /** Models a session can switch to. Per agent, since every session of an agent offers the same list. */
   async models(id: string): Promise<ModelChoice[]> {

@@ -1,7 +1,7 @@
 // Every user-visible and on-disk name lives here, so a rename is a one-file change.
 export const BRAND = {
   name: "glancecode", // CLI command, npm package, config and data folder names
-  displayName: "GlanceCode", // Even Hub listing and glasses header (20 chars max)
+  displayName: "Terminal HUD", // User-facing product name (20 chars max)
   tagline: "Claude Code sessions on your Even Realities G2 glasses",
   tmuxSocket: "glancecode", // dedicated tmux server: tmux -L glancecode
   serviceLabel: "dev.glancecode.hub", // launchd label

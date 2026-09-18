@@ -3,38 +3,151 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>GlanceCode</title>
-    <style>
-      :root { color-scheme: dark; }
-      body { margin: 0; background: #151515; color: #e6e6e6; font: 15px/1.45 -apple-system, system-ui, sans-serif; }
-      main { max-width: 640px; margin: 0 auto; padding: 20px 16px 40px; }
-      h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
-      #status { display: block; color: #9a9a9a; font-size: 13px; margin-bottom: 16px; min-height: 1.4em; }
-      pre { background: #0b0b0b; color: #7dff8a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 14px; font: 13px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; margin: 0 0 16px; min-height: 12em; }
-      form { display: flex; gap: 8px; margin-bottom: 16px; }
-      input { flex: 1; min-width: 0; background: #222; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font: inherit; }
-      button { background: #2d2d2d; color: #eee; border: 1px solid #3a3a3a; border-radius: 8px; padding: 10px 14px; font: inherit; }
-      .help { color: #8a8a8a; font-size: 13px; }
-      .help b { color: #bdbdbd; font-weight: 600; }
-    </style>
+    <title>Terminal HUD</title>
   </head>
   <body>
     <main>
-      <h1>GlanceCode <span id="version" style="font-size:12px;font-weight:400;color:#8a8a8a"></span></h1>
+      <header class="app-header">
+        <h1>Terminal HUD</h1>
+        <span id="version"></span>
+      </header>
       <span id="status">Starting…</span>
-      <pre id="mirror"></pre>
-      <form id="pair" hidden>
-        <input id="pair-code" placeholder="Pairing code from cg pair" autocomplete="off" autocapitalize="off" spellcheck="false" />
-        <button type="submit">Pair</button>
+
+      <form id="settings-form">
+        <section class="preview-card" aria-labelledby="preview-title">
+          <div class="section-heading">
+            <h2 id="preview-title">Glasses preview</h2>
+            <div class="segmented" aria-label="Preview screen">
+              <button type="button" class="selected" data-preview-mode="hud">HUD</button>
+              <button type="button" data-preview-mode="pomodoro">Pomodoro</button>
+            </div>
+          </div>
+          <div class="hud-preview-shell"><div id="hud-preview-screen"></div></div>
+          <p id="preview-warning" hidden></p>
+        </section>
+
+        <details open>
+          <summary>HUD</summary>
+          <div class="settings-body settings-grid">
+            <label class="field">Open to
+              <select id="start-view"><option value="hud">Ambient HUD</option><option value="sessions">Sessions</option></select>
+            </label>
+            <label class="field">Brightness
+              <select id="brightness"><option value="0">0 · Dim</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4 · Bright</option></select>
+            </label>
+
+            <h3 class="subheading">Clock</h3>
+            <label class="toggle field full">Show clock <input id="clock-visible" type="checkbox" /></label>
+            <label class="field">Format
+              <select id="hour-cycle"><option value="h12">12 hour</option><option value="h24">24 hour</option></select>
+            </label>
+            <label class="field">Size
+              <select id="clock-size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
+            </label>
+            <label class="toggle">Show seconds <input id="clock-seconds" type="checkbox" /></label>
+            <label class="toggle">Show AM/PM <input id="clock-period" type="checkbox" /></label>
+            <div class="field full">Position
+              <input id="clock-position" type="hidden" />
+              <div class="position-grid" data-position-grid="clock-position" aria-label="Clock position"></div>
+            </div>
+
+            <h3 class="subheading">Date</h3>
+            <label class="toggle field full">Show date <input id="date-visible" type="checkbox" /></label>
+            <label class="field">Format
+              <select id="date-format"><option value="weekday-month-day">Thu, Sep 18</option><option value="month-day">Sep 18</option><option value="numeric">9/18/26</option></select>
+            </label>
+            <label class="field">Size
+              <select id="date-size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
+            </label>
+            <div class="field full">Position
+              <input id="date-position" type="hidden" />
+              <div class="position-grid" data-position-grid="date-position" aria-label="Date position"></div>
+            </div>
+            <p class="hint full">Turn both the clock and date off for a blank HUD. Session alerts can still appear. This first QR build saves and previews size choices; the glasses use their native text size until custom image text is enabled.</p>
+          </div>
+        </details>
+
+        <details open>
+          <summary>Completion alerts</summary>
+          <div class="settings-body settings-grid">
+            <label class="field">While viewing the clock
+              <select id="completion-clock-mode"><option value="off">Off</option><option value="bell">Numbered bell</option><option value="banner">Banner</option></select>
+            </label>
+            <label class="field">While viewing Pomodoro
+              <select id="completion-pomodoro-mode"><option value="off">Off</option><option value="bell">Numbered bell</option><option value="banner">Banner</option></select>
+            </label>
+            <label class="field">Bell placement
+              <select id="completion-bell-placement"><option value="before">Before clock or timer</option><option value="after">After clock or timer</option><option value="opposite-corner">Opposite corner</option></select>
+            </label>
+            <label class="field">Banner detail
+              <select id="completion-detail"><option value="compact">Compact</option><option value="expanded">Expanded</option></select>
+            </label>
+            <label class="field">Hide banner after
+              <select id="completion-duration"><option value="0">Until handled</option><option value="5">5 seconds</option><option value="10">10 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option></select>
+            </label>
+            <label class="field">Banner size
+              <select id="completion-size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
+            </label>
+            <div class="field full">Banner position
+              <input id="completion-position" type="hidden" />
+              <div class="position-grid" data-position-grid="completion-position" aria-label="Completion banner position"></div>
+            </div>
+            <p class="hint full">A timed banner hides from the HUD, but the finished session stays unread in Sessions. The numbered bell remains until you open or dismiss the finished session. It uses the clock or Pomodoro size.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Pomodoro</summary>
+          <div class="settings-body settings-grid">
+            <label class="field">Focus
+              <input id="pomodoro-work" type="number" min="1" max="180" inputmode="numeric" /><span class="hint">minutes</span>
+            </label>
+            <label class="field">Short break
+              <input id="pomodoro-short-break" type="number" min="1" max="60" inputmode="numeric" /><span class="hint">minutes</span>
+            </label>
+            <label class="field">Long break
+              <input id="pomodoro-long-break" type="number" min="1" max="120" inputmode="numeric" /><span class="hint">minutes</span>
+            </label>
+            <label class="field">Long break after
+              <input id="pomodoro-rounds" type="number" min="1" max="12" inputmode="numeric" /><span class="hint">focus rounds</span>
+            </label>
+            <label class="field">Timer size
+              <select id="pomodoro-size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
+            </label>
+            <div class="field">Timer position
+              <input id="pomodoro-position" type="hidden" />
+              <div class="position-grid" data-position-grid="pomodoro-position" aria-label="Pomodoro position"></div>
+            </div>
+            <p class="hint full">Pomodoro always shows minutes and seconds.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Sessions</summary>
+          <div class="settings-body settings-grid">
+            <label class="toggle field full">Show time in session screens <input id="sessions-time" type="checkbox" /></label>
+            <label class="toggle field full">Show date in session screens <input id="sessions-date" type="checkbox" /></label>
+            <label class="toggle field full">Show recent session history <input id="sessions-history" type="checkbox" /></label>
+            <label class="toggle field full">Open new glasses sessions in a Mac terminal <input id="open-terminal" type="checkbox" /></label>
+            <p class="hint full">New sessions always run in tmux so the glasses and Mac can share them. This option also opens an attached terminal window on your Mac.</p>
+          </div>
+        </details>
       </form>
-      <p class="help">
-        <b>Swipe</b> moves or scrolls. <b>Tap</b> opens or picks. <b>Hold</b> to talk; words appear as you speak. Release to review it, then <b>tap</b> to send, hold again to redo, or <b>double-tap</b> to cancel.
-        <b>Double-tap</b> goes back. <b>Tap then hold</b> opens the menu: interrupt, switch model, compact, or clear.
-        Say <b>slash clear</b>, <b>slash resume</b>, <b>slash compact</b>, <b>slash context</b>, or <b>slash cost</b> to use those commands by voice.
-      </p>
-      <p><button id="demo" type="button" hidden>Try the demo</button> <button id="unpair" type="button">Forget this hub</button></p>
-      <p class="help">Works with Claude Code on your own computer through the free glancecode hub. Not affiliated with or endorsed by Anthropic or Even Realities.
-        <a href="https://github.com/sousyllc/glancecode#readme" style="color:#9ecbff">Setup guide</a> · <a href="https://github.com/sousyllc/glancecode/blob/main/docs/privacy.md" style="color:#9ecbff">Privacy</a></p>
+
+      <section class="connection-card">
+        <div class="section-heading"><h2>Connection</h2></div>
+        <pre id="mirror"></pre>
+        <form id="pair" hidden>
+          <input id="pair-code" type="text" placeholder="https://your-hub:7443#pair-token" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <button type="submit">Pair</button>
+        </form>
+        <div class="actions">
+          <button id="demo" type="button" hidden>Try the demo</button>
+          <button id="unpair" type="button">Forget this hub</button>
+        </div>
+        <p class="help"><b>Glasses:</b> swipe to move or scroll, tap to open, hold to dictate, and double-tap to go back. Tap then hold opens the current screen's menu.</p>
+        <p class="help">Terminal HUD connects to the private hub on your own computer. Voice transcription stays on that computer.</p>
+      </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

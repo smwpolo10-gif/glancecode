@@ -150,6 +150,8 @@ test("readEffort reads Claude Code's exact status-line value", () => {
   assert.equal(readEffort("  ◉ xhigh · /effort"), "xhigh");
   assert.equal(readEffort("Opus 5 (1M context) with xhigh effort · Claude Max"), "xhigh");
   assert.equal(readClaudeModel("Opus 5 (1M context) with xhigh effort · Claude Max"), "Opus 5");
+  assert.equal(readClaudeModel("  │ Nebula Experimental 7.2 (200K context) with medium effort · Claude Max"), "Nebula Experimental 7.2");
+  assert.equal(readClaudeModel("Fable (1M context) with high effort"), "Fable");
   assert.equal(readEffort("Opus 5 · idle"), null);
 });
 

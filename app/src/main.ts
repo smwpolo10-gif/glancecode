@@ -8,6 +8,9 @@ import { Hub, type HubConfig } from "./hub.ts";
 import { InputRouter, type Action } from "./input.ts";
 import { BODY_INNER_W, HEADER_INNER_W } from "./display.ts";
 import { spread, wrap } from "./text.ts";
+import { SettingsStore } from "./settings.ts";
+import { bindSettingsUI } from "./settings-ui.ts";
+import "./style.css";
 
 const KEY = "glancecode.hub";
 const LEGACY_KEYS: string[] = [];
@@ -15,7 +18,7 @@ declare const __APP_VERSION__: string;
 declare const __APP_BUILT__: string;
 declare const __APP_NAME__: string;
 export const VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
-const APP_NAME = typeof __APP_NAME__ === "string" ? __APP_NAME__ : "GlanceCode";
+const APP_NAME = typeof __APP_NAME__ === "string" ? __APP_NAME__ : "Terminal HUD";
 
 async function readConfig(bridge: EvenAppBridge): Promise<HubConfig | null> {
   const params = new URLSearchParams(location.search);
@@ -49,6 +52,8 @@ function el<T extends HTMLElement>(id: string) {
 
 async function main() {
   const bridge = await waitForEvenAppBridge();
+  const settings = await SettingsStore.open(bridge);
+  bindSettingsUI(settings);
   const cfg = await readConfig(bridge);
   const demo = new URLSearchParams(location.search).has("demo");
 
@@ -85,7 +90,7 @@ async function main() {
   const start = async (hub: Hub) => {
     if (started) return;
     started = true;
-    const app = new App(bridge, display, hub);
+    const app = new App(bridge, display, hub, settings);
     router.target = (a) => void app.handle(a);
     hub.subscribe(() => {
       if (hub instanceof DemoHub) status.textContent = "Demo mode: sample sessions, nothing runs. Pair to use your own machine.";

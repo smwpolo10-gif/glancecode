@@ -64,9 +64,17 @@ export interface RecentProject {
   mtime: number;
 }
 
+export interface FinishedEvent {
+  id: string;
+  project: string;
+  message: string;
+  at: number;
+}
+
 export type HubEvent =
   | { type: "session"; session: SessionSummary }
   | { type: "items"; id: string; items: Item[] }
   | { type: "removed"; id: string }
+  | ({ type: "finished" } & FinishedEvent)
   | { type: "resync" }
   | { type: "ping" };

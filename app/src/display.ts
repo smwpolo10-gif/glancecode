@@ -27,21 +27,25 @@ export interface Frame {
   header: string;
   body: string[];
   menu?: MenuItem[];
+  brightness?: 0 | 1 | 2 | 3 | 4;
 }
 
 export class Display {
   private created = false;
-  private shown = { header: "", body: "", menuKey: "" };
+  private shown = { header: "", body: "", menuKey: "", brightness: 4 };
   private pending: Frame | null = null;
   private busy = false;
   lastWriteAt = 0;
   onFrame: (f: Frame) => void = () => {};
+  private bridge: EvenAppBridge;
 
-  constructor(private bridge: EvenAppBridge) {}
+  constructor(bridge: EvenAppBridge) {
+    this.bridge = bridge;
+  }
 
   /** Forget what we think is on the glasses, so the next frame is sent in full. */
   invalidate() {
-    this.shown = { header: "", body: "", menuKey: this.shown.menuKey };
+    this.shown = { header: "", body: "", menuKey: this.shown.menuKey, brightness: this.shown.brightness };
   }
 
   show(frame: Frame) {
@@ -51,17 +55,17 @@ export class Display {
     void this.flush();
   }
 
-  private containers(header: string, body: string) {
+  private containers(header: string, body: string, brightness: number) {
     return [
       new TextContainerProperty({
         containerID: HEADER.id, containerName: HEADER.name,
         xPosition: HEADER.x, yPosition: HEADER.y, width: HEADER.w, height: HEADER.h,
-        paddingLength: HEADER.pad, borderWidth: 0, isEventCapture: 0, content: header,
+        paddingLength: HEADER.pad, borderWidth: 0, isEventCapture: 0, content: header, textColor: brightness,
       }),
       new TextContainerProperty({
         containerID: BODY.id, containerName: BODY.name,
         xPosition: BODY.x, yPosition: BODY.y, width: BODY.w, height: BODY.h,
-        paddingLength: BODY.pad, borderWidth: 0, isEventCapture: 1, content: body,
+        paddingLength: BODY.pad, borderWidth: 0, isEventCapture: 1, content: body, textColor: brightness,
       }),
     ];
   }
@@ -81,19 +85,20 @@ export class Display {
         const header = frame.header || " ";
         const body = frame.body.join("\n") || " ";
         const menuKey = JSON.stringify(frame.menu || []);
+        const brightness = frame.brightness ?? 4;
         if (!this.created) {
           const result = await this.bridge.createStartUpPageContainer(
-            new CreateStartUpPageContainer({ containerTotalNum: 2, textObject: this.containers(header, body), menuObject: this.menuObject(frame.menu) }),
+            new CreateStartUpPageContainer({ containerTotalNum: 2, textObject: this.containers(header, body, brightness), menuObject: this.menuObject(frame.menu) }),
           );
           // Treat startup as spent even when it fails; later frames rebuild instead.
           this.created = true;
           if (String(result) !== "0" && String(result) !== "success") {
-            await this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: 2, textObject: this.containers(header, body), menuObject: this.menuObject(frame.menu) }));
+            await this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: 2, textObject: this.containers(header, body, brightness), menuObject: this.menuObject(frame.menu) }));
           }
-          this.shown = { header, body, menuKey };
-        } else if (menuKey !== this.shown.menuKey) {
-          await this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: 2, textObject: this.containers(header, body), menuObject: this.menuObject(frame.menu) }));
-          this.shown = { header, body, menuKey };
+          this.shown = { header, body, menuKey, brightness };
+        } else if (menuKey !== this.shown.menuKey || brightness !== this.shown.brightness) {
+          await this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: 2, textObject: this.containers(header, body, brightness), menuObject: this.menuObject(frame.menu) }));
+          this.shown = { header, body, menuKey, brightness };
         } else {
           if (header !== this.shown.header) {
             await this.bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: HEADER.id, containerName: HEADER.name, content: header }));

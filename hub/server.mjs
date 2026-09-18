@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { extname, join, normalize, resolve } from "node:path";
+import { basename, extname, join, normalize, resolve } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -69,7 +69,15 @@ export function startHub({ quiet = false, feed = true } = {}) {
     notifier.send(`${s.id}:${kind}`, `${s.project} needs you`, what);
   });
   registry.on("finished", (s, last) => {
-    notifier.send(`${s.id}:done`, `${s.project} finished`, last.replace(/\s+/g, " ") || "Turn complete");
+    const message = String(last || "").replace(/\s+/g, " ").trim() || "Turn complete";
+    const finished = { type: "finished", id: s.id, project: s.project, message: message.slice(0, 4000), at: Date.now() };
+    // Registry emits "finished" while it is still applying the Stop hook. Publish
+    // after that call stack so clients receive the idle session state first; a HUD
+    // must not mistake the previous working state for a newer turn and clear the alert.
+    queueMicrotask(() => {
+      publish(finished);
+      notifier.send(`${s.id}:done`, `${s.project} finished`, message);
+    });
   });
 
   // A sleeping Mac answers nothing, so the glasses see a dead hub. `caffeinate -s`
@@ -271,6 +279,19 @@ export function startHub({ quiet = false, feed = true } = {}) {
       // A project counts as recent for either agent.
       const projects = new Map(recentProjects(15, { allowedRoots: cfg.allowedRoots }).map((p) => [p.cwd, p]));
       for (const t of others) if (!projects.has(t.cwd) || projects.get(t.cwd).mtime < t.mtime) projects.set(t.cwd, { cwd: t.cwd, project: t.project, mtime: t.mtime });
+      // An allowed project must remain launchable even before Claude has written
+      // its first transcript there. This also makes the empty-session state useful.
+      for (const root of cfg.allowedRoots || []) {
+        const cwd = resolve(root);
+        try {
+          const info = statSync(cwd);
+          if (info.isDirectory() && registry.allows(cwd) && !projects.has(cwd)) {
+            projects.set(cwd, { cwd, project: basename(cwd) || cwd, mtime: info.mtimeMs });
+          }
+        } catch {
+          /* an unavailable configured root cannot be launched */
+        }
+      }
       return send(res, 200, { agents, projects: [...projects.values()].sort((a, b) => b.mtime - a.mtime).slice(0, 15), sessions });
     }
 
@@ -316,14 +337,23 @@ export function startHub({ quiet = false, feed = true } = {}) {
         return send(res, 200, { session: session.summaryJSON() });
       }
       const agent = launchAgent(body);
-      const { target } = await launch({ ...body, agent });
+      const { name, target } = await launch({ ...body, agent });
       const session = await waitForSessionOnPane(target);
       if (!session) throw new HttpError(504, `${agent === "gemini" ? "Gemini CLI" : "Claude Code"} started but did not report in; is the hook installed? (${BRAND.name} install)`);
       if (body.prompt) {
         await tmuxCtl.waitForInput(session.tmux, 20000, session.agent);
         await tmuxCtl.sendPrompt(session.tmux, body.prompt);
       }
-      return send(res, 200, { session: session.summaryJSON() });
+      let terminalApp = null;
+      if (body.openTerminal === true) {
+        try {
+          terminalApp = await tmuxCtl.openAttachedTerminal({ cwd: session.cwd, name });
+          log(`opened ${terminalApp} for ${name}`);
+        } catch (err) {
+          log(`could not open a visible terminal for ${name}: ${err.message}`);
+        }
+      }
+      return send(res, 200, { session: session.summaryJSON(), terminalOpened: !!terminalApp, terminalApp });
     }
 
     const m = /^\/api\/sessions\/([0-9a-f-]{36})(?:\/([a-z]+))?$/.exec(path);
@@ -338,6 +368,21 @@ export function startHub({ quiet = false, feed = true } = {}) {
         if (codexFor(s)) return send(res, 200, { models: codex.models });
         // Gemini switches models through an interactive picker, so the glasses don't offer it.
         return send(res, 200, { models: s.agent === "gemini" ? [] : CLAUDE_MODELS });
+      }
+      if (method === "POST" && action === "end") {
+        if (s.agent === "codex") throw new HttpError(409, "ending Codex sessions is not supported by this hub");
+        const target = controllable(s);
+        await tmuxCtl.terminateSession(target);
+        s.tmux = null;
+        s.state = "ended";
+        s.waiting = null;
+        s.activity = "";
+        s.lastActivity = Date.now();
+        // Ending removes the live row immediately. The transcript remains in
+        // Claude's history and can still be opened from the History picker.
+        registry.remove(s.id);
+        log(`ended ${s.project} (${s.id.slice(0, 8)}) and terminated its tmux pane`);
+        return send(res, 200, { ok: true });
       }
       const cx = codexFor(s);
       if (cx) return codexAction(req, res, s, action, method);

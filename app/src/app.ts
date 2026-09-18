@@ -3,8 +3,12 @@ import { AudioInputSource, ImuReportPace, type EvenAppBridge } from "@evenrealit
 import { every, later, type Cancel } from "./timers.ts";
 import { BODY_INNER_W, BODY_LINES, HEADER_INNER_W, Display, type Frame, type MenuItem } from "./display.ts";
 import { GLYPH, ago, itemsToLines, shortModel, stateLabel } from "./format.ts";
+import { AmbientScreen, PomodoroScreen, sessionStamp } from "./hud.ts";
 import type { Hub } from "./hub.ts";
 import type { Action } from "./input.ts";
+import { CompletionInbox } from "./completion.ts";
+import { PomodoroTimer } from "./pomodoro.ts";
+import type { SettingsStore } from "./settings.ts";
 import { padTo, spread, truncate, width, wrap } from "./text.ts";
 import type { Agent, ModelChoice, RecentProject, SessionSummary } from "./types.ts";
 import { spokenSlashCommand } from "./voice-command.ts";
@@ -15,7 +19,7 @@ const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev
 const CURSOR = "▶ ";
 const NO_CURSOR = padTo("", width(CURSOR)); // spaces measured to the cursor's pixel width
 
-interface Screen {
+export interface Screen {
   frame(): Frame;
   action(a: Action): void | Promise<void>;
   enter?(): void;
@@ -46,12 +50,49 @@ export class App {
   private holdStartedAt = 0;
   private backgroundAt = 0;
   private tickTimer: Cancel | null = null;
+  private tickKey = "";
+  readonly completions = new CompletionInbox();
+  readonly pomodoro: PomodoroTimer;
 
-  constructor(public bridge: EvenAppBridge, public display: Display, public hub: Hub) {
-    hub.subscribe(() => this.render());
-    this.push(new HomeScreen(this));
+  constructor(public bridge: EvenAppBridge, public display: Display, public hub: Hub, public settings: SettingsStore) {
+    const p = settings.current.pomodoro;
+    this.pomodoro = new PomodoroTimer(p, (reason) => {
+      if (reason === "complete") this.toast("Pomodoro phase complete", 3500);
+      else this.render();
+    });
+    hub.subscribe(() => {
+      this.completions.ingest(hub.finished);
+      if (this.top instanceof SessionScreen) this.completions.acknowledge(this.top.sessionId);
+      for (const session of hub.sessions.values()) {
+        if (session.state === "working" || session.state === "starting" || session.state === "ended") this.completions.resolve(session.id);
+      }
+      this.render();
+    });
+    this.stack.push(new AmbientScreen(this));
+    if (settings.current.startView === "sessions") this.stack.push(new HomeScreen(this));
+    settings.subscribe((next) => {
+      this.pomodoro.updateDurations(next.pomodoro);
+      this.tickKey = "";
+      this.render(true);
+    });
+    this.top.enter?.();
+    this.render(true);
     this.tickTimer = every(() => {
       if (this.voice.phase === "recording") this.render();
+      const top = this.top;
+      if (top instanceof AmbientScreen || top instanceof PomodoroScreen) {
+        const key = top.tickKey();
+        if (key !== this.tickKey) {
+          this.tickKey = key;
+          this.render();
+        }
+      } else if ((top instanceof HomeScreen || top instanceof SessionScreen) && (this.settings.current.sessions.showTime || this.settings.current.sessions.showDate)) {
+        const key = sessionStamp(this.settings.current);
+        if (key !== this.tickKey) {
+          this.tickKey = key;
+          this.render();
+        }
+      }
     }, 500);
   }
 
@@ -61,6 +102,7 @@ export class App {
 
   push(s: Screen) {
     this.stack.push(s);
+    this.tickKey = "";
     s.enter?.();
     this.render(true);
   }
@@ -68,6 +110,7 @@ export class App {
   pop() {
     if (this.stack.length > 1) {
       this.stack.pop();
+      this.tickKey = "";
       this.render(true);
     }
   }
@@ -75,6 +118,30 @@ export class App {
   replace(s: Screen) {
     this.stack.pop();
     this.push(s);
+  }
+
+  openSessions() {
+    if (!(this.top instanceof HomeScreen)) this.push(new HomeScreen(this));
+  }
+
+  openSession(id: string) {
+    this.completions.acknowledge(id);
+    if (!this.hub.sessions.has(id)) {
+      this.toast("That session is no longer open", 3000);
+      this.openSessions();
+      return;
+    }
+    this.push(new SessionScreen(this, id));
+  }
+
+  openPomodoro() {
+    if (!(this.top instanceof PomodoroScreen)) this.push(new PomodoroScreen(this));
+  }
+
+  popToAmbient() {
+    if (this.stack.length > 1) this.stack.splice(1);
+    this.tickKey = "";
+    this.render(true);
   }
 
   toast(text: string, ms = 2500) {
@@ -142,9 +209,15 @@ export class App {
   private draw() {
     this.lastDrawAt = Date.now();
     const top = this.top;
-    this.keepAwake(top instanceof SessionScreen && top.isActive() && this.voice.phase === "idle");
+    const screenNeedsWake =
+      (top instanceof SessionScreen && top.isActive()) ||
+      (top instanceof AmbientScreen && top.needsWake()) ||
+      (top instanceof PomodoroScreen && top.needsWake()) ||
+      ((top instanceof HomeScreen || top instanceof SessionScreen) && (this.settings.current.sessions.showTime || this.settings.current.sessions.showDate)) ||
+      ((top instanceof AmbientScreen || top instanceof PomodoroScreen) && [...this.hub.sessions.values()].some((s) => s.state === "working" || s.state === "starting" || s.state === "waiting"));
+    this.keepAwake(screenNeedsWake && this.voice.phase === "idle");
     let frame: Frame;
-    if (!this.hub.connected && this.hub.sessions.size === 0) {
+    if (!this.hub.connected && this.hub.sessions.size === 0 && !(top instanceof AmbientScreen) && !(top instanceof PomodoroScreen)) {
       frame = {
         header: spread("Sessions", "offline", HEADER_INNER_W),
         body: wrap(`Can't reach the hub at ${this.hub.cfg.url}. Retrying.\n\nOn your computer run: glancecode doctor\n${this.hub.lastError ? `(${this.hub.lastError})` : ""}`, BODY_INNER_W),
@@ -156,6 +229,7 @@ export class App {
       frame = this.top.frame();
     }
     frame = this.overlayVoice(frame);
+    frame = { ...frame, brightness: this.settings.current.hud.brightness };
     if (this.toastText) frame = { ...frame, header: truncate(this.toastText, HEADER_INNER_W) };
     else if (!this.hub.connected) frame = { ...frame, header: spread(truncate(frame.header, HEADER_INNER_W - 90), "reconnecting", HEADER_INNER_W) };
     this.display.show(frame);
@@ -386,7 +460,7 @@ function counts(sessions: SessionSummary[]): string {
 
 // ---------- home: session list ----------
 
-type HomeRow = { kind: "new" } | { kind: "resume" } | { kind: "session"; s: SessionSummary };
+type HomeRow = { kind: "new" } | { kind: "history" } | { kind: "session"; s: SessionSummary };
 
 class HomeScreen implements Screen {
   private selected = 0;
@@ -395,7 +469,12 @@ class HomeScreen implements Screen {
   constructor(private app: App) {}
 
   private rows(): HomeRow[] {
-    return [...this.app.hub.list().map((s) => ({ kind: "session" as const, s })), { kind: "new" }, { kind: "resume" }];
+    const sessions = this.app.hub.list().sort((a, b) => Number(this.app.completions.has(b.id)) - Number(this.app.completions.has(a.id)));
+    return [
+      ...sessions.map((s) => ({ kind: "session" as const, s })),
+      { kind: "new" as const },
+      ...(this.app.settings.current.sessions.showHistory ? [{ kind: "history" as const }] : []),
+    ];
   }
 
   private clampSelection(rows: HomeRow[]) {
@@ -420,14 +499,15 @@ class HomeScreen implements Screen {
       if (r.kind === "new") {
         lines.push(`${cur}+ New session`);
         lineRows.push(i);
-      } else if (r.kind === "resume") {
-        lines.push(`${cur}↑ Resume a recent session`);
+      } else if (r.kind === "history") {
+        lines.push(`${cur}↑ History`);
         lineRows.push(i);
       } else {
         const s = r.s;
         const right = `${stateLabel(s)} · ${ago(s.lastActivity)}`;
         const viewOnly = !s.controllable && s.state !== "ended" ? " (view)" : "";
-        lines.push(spread(`${cur}${GLYPH[s.state]} ${sessionName(s, sessions, this.app.hub.agents.length > 1)}${viewOnly}`, right, BODY_INNER_W));
+        const unread = this.app.completions.has(s.id) ? "● " : "";
+        lines.push(spread(`${cur}${unread}${GLYPH[s.state]} ${sessionName(s, sessions, this.app.hub.agents.length > 1)}${viewOnly}`, right, BODY_INNER_W));
         lineRows.push(i);
         if (i === this.selected) {
           const detail = s.waiting?.detail || s.activity || s.title || s.summary || "";
@@ -441,7 +521,11 @@ class HomeScreen implements Screen {
     const selLine = lineRows.indexOf(this.selected);
     const { rows: visible } = windowAround(lines, selLine, BODY_LINES);
     return {
-      header: spread(this.app.hub.cfg.url === "demo" ? "Sessions · demo" : "Sessions", sessions.length ? counts(sessions) : "no sessions", HEADER_INNER_W),
+      header: spread(
+        this.app.hub.cfg.url === "demo" ? "Sessions · demo" : "Sessions",
+        [sessions.length ? counts(sessions) : "no sessions", sessionStamp(this.app.settings.current)].filter(Boolean).join(" · "),
+        HEADER_INNER_W,
+      ),
       body: visible,
       menu: [{ id: 7, name: `Refresh · v${APP_VERSION}` }],
     };
@@ -452,13 +536,13 @@ class HomeScreen implements Screen {
     this.clampSelection(rows);
     if (a.type === "up") this.move(-1, rows);
     else if (a.type === "down") this.move(1, rows);
-    else if (a.type === "doubleTap") void this.app.bridge.shutDownPageContainer(1);
+    else if (a.type === "doubleTap") this.app.pop();
     else if (a.type === "menu" && a.id === 7) this.app.hub.refresh();
     else if (a.type === "tap") {
       const r = rows[this.selected];
-      if (r?.kind === "session") this.app.push(new SessionScreen(this.app, r.s.id));
+      if (r?.kind === "session") this.app.openSession(r.s.id);
       else if (r?.kind === "new") this.app.push(new ProjectPicker(this.app));
-      else if (r?.kind === "resume") this.app.push(new ResumePicker(this.app));
+      else if (r?.kind === "history") this.app.push(new HistoryPicker(this.app));
     }
   }
 
@@ -470,16 +554,11 @@ class HomeScreen implements Screen {
 
   voiceTarget() {
     const r = this.rows()[this.selected];
-    if (r?.kind === "resume") {
-      return async (text: string) => {
-        if (spokenSlashCommand(text) === "/resume") this.app.push(new ResumePicker(this.app));
-        else this.app.toast("Say 'slash resume', or tap Resume");
-      };
-    }
     if (r?.kind !== "session" || !r.s.controllable || r.s.waiting?.kind === "permission") return null;
     const { id, project } = r.s;
     return async (text: string) => {
-      await this.app.hub.prompt(id, text);
+      const command = spokenSlashCommand(text);
+      await this.app.hub.prompt(id, command === "/resume" ? command : text);
       this.app.toast(`Sent to ${project}`);
     };
   }
@@ -489,15 +568,16 @@ class HomeScreen implements Screen {
 
 // Model entries take menu ids from 100 up; the glasses menu holds ten items.
 const MODEL_MENU_BASE = 100;
-const MAX_MODEL_ITEMS = 5;
+const MAX_MODEL_ITEMS = 4;
 
-function sessionMenu(models: ModelChoice[], agent: Agent): MenuItem[] {
+function sessionMenu(models: ModelChoice[], agent: Agent, controllable = false): MenuItem[] {
   return [
     { id: 1, name: "Interrupt" },
     { id: 2, name: "Jump to latest" },
     ...models.slice(0, MAX_MODEL_ITEMS).map((m, i) => ({ id: MODEL_MENU_BASE + i, name: `Use ${m.name}` })),
     { id: 6, name: "Compact" },
     ...(agent === "codex" ? [] : [{ id: 8, name: "Clear conversation" }]),
+    ...(controllable ? [{ id: 9, name: "End session" }] : []),
     { id: 7, name: "Refresh" },
   ];
 }
@@ -513,6 +593,10 @@ class SessionScreen implements Screen {
   private models: ModelChoice[] = [];
 
   constructor(private app: App, private id: string) {}
+
+  get sessionId() {
+    return this.id;
+  }
 
   enter() {
     void this.app.hub.loadItems(this.id).catch((err) => this.app.toast(`! ${err.message}`));
@@ -598,7 +682,7 @@ class SessionScreen implements Screen {
 
   frame(): Frame {
     const s = this.session;
-    const menu = sessionMenu(this.models, agentOf(s));
+    const menu = sessionMenu(this.models, agentOf(s), !!s?.controllable);
     if (!s) return { header: "Session closed", body: wrap("This session is no longer running. Double-tap to go back.", BODY_INNER_W), menu };
     const items = this.app.hub.items.get(this.id);
     if (!items) this.app.hub.ensureItems(this.id); // self-heal if the cache was dropped
@@ -618,6 +702,8 @@ class SessionScreen implements Screen {
     if (!following && s.waiting) rightParts.push("◆ tap");
     const model = shortModel(s.model);
     rightParts.push(s.controllable ? `${model}${s.effort ? ` · ${s.effort}` : ""}` : "view only");
+    const stamp = sessionStamp(this.app.settings.current);
+    if (stamp) rightParts.push(stamp);
     return { header: spread(left, rightParts.filter(Boolean).join("  "), HEADER_INNER_W), body, menu };
   }
 
@@ -663,6 +749,8 @@ class SessionScreen implements Screen {
           this.app.toast("Compacting");
         } else if (a.id === 8 && agentOf(s) !== "codex") {
           this.app.push(new ClearConversationScreen(this.app, this.id, s?.project || "this session"));
+        } else if (a.id === 9 && s?.controllable) {
+          this.app.push(new EndSessionScreen(this.app, this.id, s.project));
         } else if (a.id >= MODEL_MENU_BASE) {
           const model = this.models[a.id - MODEL_MENU_BASE];
           if (model) {
@@ -685,7 +773,8 @@ class SessionScreen implements Screen {
       if (current?.waiting?.kind === "question") {
         await this.app.hub.answer(this.id, text);
       } else if (command === "/resume") {
-        this.app.push(new ResumePicker(this.app));
+        await this.app.hub.prompt(this.id, command);
+        this.app.toast("Sent /resume");
       } else if (command === "/clear") {
         this.app.push(new ClearConversationScreen(this.app, this.id, current?.project || "this session"));
       } else if (command) {
@@ -696,6 +785,32 @@ class SessionScreen implements Screen {
       }
       this.scroll = 0;
     };
+  }
+}
+
+class EndSessionScreen implements Screen {
+  constructor(private app: App, private id: string, private project: string) {}
+
+  frame(): Frame {
+    return {
+      header: "End session?",
+      body: wrap(
+        `This stops Claude in ${this.project}. Any attached computer terminal returns to its shell.\n\nTap to end · double-tap to cancel`,
+        BODY_INNER_W,
+      ),
+    };
+  }
+
+  async action(a: Action) {
+    if (a.type === "doubleTap") {
+      this.app.pop();
+    } else if (a.type === "tap") {
+      await this.app.hub.end(this.id);
+      this.app.completions.acknowledge(this.id);
+      this.app.pop();
+      this.app.pop();
+      this.app.toast(`${this.project} ended`);
+    }
   }
 }
 
@@ -780,9 +895,9 @@ abstract class Picker implements Screen {
 
 async function startSession(app: App, p: RecentProject, agent: Agent) {
   app.toast(`Starting ${AGENT_NAME[agent]} in ${p.project}…`, 15000);
-  const { session } = await app.hub.launch(p.cwd, undefined, agent);
+  const { session, terminalOpened } = await app.hub.launch(p.cwd, undefined, agent, app.settings.current.openTerminalOnLaunch);
   app.hub.sessions.set(session.id, session);
-  app.toast(`Started ${p.project}. Hold to talk.`);
+  app.toast(`Started ${p.project}${terminalOpened ? " on glasses + Mac" : ""}. Hold to talk.`);
   app.replace(new SessionScreen(app, session.id));
 }
 
@@ -818,9 +933,9 @@ class AgentPicker extends Picker {
   }
 }
 
-class ResumePicker extends Picker {
+class HistoryPicker extends Picker {
   constructor(app: App) {
-    super(app, "Resume");
+    super(app, "History");
   }
 
   async load() {
@@ -831,7 +946,7 @@ class ResumePicker extends Picker {
       right: `${showAgent ? `${AGENT_NAME[agentOf(r)]} ` : ""}${ago(r.mtime)}`,
       run: async () => {
         this.app.toast(`Resuming ${r.project}…`, 20000);
-        const { session } = await this.app.hub.launch(r.cwd, r.id, r.agent);
+        const { session } = await this.app.hub.launch(r.cwd, r.id, r.agent, this.app.settings.current.openTerminalOnLaunch);
         this.app.hub.sessions.set(session.id, session);
         this.app.toast(`Resumed ${r.project}`);
         this.app.replace(new SessionScreen(this.app, session.id));
