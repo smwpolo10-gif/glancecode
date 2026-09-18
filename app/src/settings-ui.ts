@@ -91,6 +91,7 @@ function readForm(): TerminalHudSettings {
       size: value("completion-size"),
     },
     pomodoro: {
+      inSwipeCycle: checked("pomodoro-in-swipe-cycle"),
       workMinutes: numberValue("pomodoro-work"),
       shortBreakMinutes: numberValue("pomodoro-short-break"),
       longBreakMinutes: numberValue("pomodoro-long-break"),
@@ -146,6 +147,7 @@ function assignForm(settings: TerminalHudSettings) {
   byId<HTMLSelectElement>("completion-size").value = settings.completion.size;
   setPosition("completion-position", settings.completion.position);
   byId<HTMLInputElement>("pomodoro-work").value = String(settings.pomodoro.workMinutes);
+  byId<HTMLInputElement>("pomodoro-in-swipe-cycle").checked = settings.pomodoro.inSwipeCycle;
   byId<HTMLInputElement>("pomodoro-short-break").value = String(settings.pomodoro.shortBreakMinutes);
   byId<HTMLInputElement>("pomodoro-long-break").value = String(settings.pomodoro.longBreakMinutes);
   byId<HTMLInputElement>("pomodoro-rounds").value = String(settings.pomodoro.roundsBeforeLongBreak);
@@ -235,7 +237,14 @@ function renderPreview(settings: TerminalHudSettings) {
   const mode = document.querySelector<HTMLButtonElement>("[data-preview-mode].selected")?.dataset.previewMode || "hud";
   const nodes: HTMLElement[] = [];
   const now = new Date();
-  if (mode === "pomodoro") {
+  if (mode === "blank") {
+    if (settings.completion.clockMode === "bell") {
+      nodes.push(widget("bell", "◆ 1", "top-right", "small"));
+    } else if (settings.completion.clockMode === "banner") {
+      const message = settings.completion.detail === "expanded" ? "√ Pillbee finished\nA moment ago" : "√ Pillbee finished";
+      nodes.push(widget("completion", message, settings.completion.position, settings.completion.size));
+    }
+  } else if (mode === "pomodoro") {
     addAlertPreview(
       nodes,
       settings,

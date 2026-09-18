@@ -14,7 +14,19 @@ const MENU_RESET = 30;
 const MENU_SKIP = 31;
 const MENU_ADD_FIVE = 32;
 const MENU_HUD = 33;
+const MENU_BLANK = 34;
 const MENU_REFRESH = 7;
+
+export type HudMode = "ambient" | "pomodoro" | "blank";
+
+/** The glasses swipe cycle can omit Pomodoro without making the timer unavailable from the menu. */
+export function cycleHudMode(mode: HudMode, direction: "up" | "down", includePomodoro: boolean): HudMode {
+  const modes: HudMode[] = includePomodoro ? ["ambient", "pomodoro", "blank"] : ["ambient", "blank"];
+  const index = modes.indexOf(mode);
+  if (index < 0) return direction === "down" ? "blank" : "ambient";
+  const step = direction === "down" ? 1 : -1;
+  return modes[(index + step + modes.length) % modes.length];
+}
 
 export type CompletionMode = "off" | "bell" | "banner";
 
@@ -167,6 +179,7 @@ export class AmbientScreen implements Screen {
     const menu: MenuItem[] = [
       { id: MENU_SESSIONS, name: "Sessions" },
       { id: MENU_POMODORO, name: "Pomodoro" },
+      { id: MENU_BLANK, name: "Blank HUD" },
       ...(this.app.completions.count ? [{ id: MENU_DISMISS, name: "Dismiss all alerts" }] : []),
       { id: MENU_REFRESH, name: "Refresh" },
       { id: MENU_EXIT, name: "Exit Terminal HUD" },
@@ -199,12 +212,13 @@ export class AmbientScreen implements Screen {
       this.app.completions.acknowledge(banner.id);
       this.app.toast("Dismissed", 1200);
     } else if (a.type === "up" || a.type === "down") {
-      this.app.openPomodoro();
+      this.app.showHud(cycleHudMode("ambient", a.type, settings.pomodoro.inSwipeCycle));
     } else if (a.type === "doubleTap") {
       void this.app.bridge.shutDownPageContainer(1);
     } else if (a.type === "menu") {
       if (a.id === MENU_SESSIONS) this.app.openSessions();
       else if (a.id === MENU_POMODORO) this.app.openPomodoro();
+      else if (a.id === MENU_BLANK) this.app.showHud("blank");
       else if (a.id === MENU_DISMISS) {
         this.app.completions.clear();
         this.app.toast("Alerts dismissed", 1200);
@@ -262,6 +276,7 @@ export class PomodoroScreen implements Screen {
       ...(this.app.completions.count ? [{ id: MENU_DISMISS, name: "Dismiss all alerts" }] : []),
       { id: MENU_SESSIONS, name: "Sessions" },
       { id: MENU_HUD, name: "Ambient HUD" },
+      { id: MENU_BLANK, name: "Blank HUD" },
     ];
     return { header: "", body: layoutWidgets(widgets), menu };
   }
@@ -280,8 +295,10 @@ export class PomodoroScreen implements Screen {
     } else if (a.type === "down" && banner) {
       this.app.completions.acknowledge(banner.id);
       this.app.toast("Dismissed", 1200);
-    } else if (a.type === "up" || a.type === "down" || a.type === "doubleTap") {
-      this.app.pop();
+    } else if (a.type === "up" || a.type === "down") {
+      this.app.showHud(cycleHudMode("pomodoro", a.type, settings.pomodoro.inSwipeCycle));
+    } else if (a.type === "doubleTap") {
+      this.app.popToAmbient();
     } else if (a.type === "menu") {
       if (a.id === MENU_RESET) this.app.pomodoro.reset();
       else if (a.id === MENU_SKIP) this.app.pomodoro.skip();
@@ -289,6 +306,7 @@ export class PomodoroScreen implements Screen {
       else if (a.id === MENU_DISMISS) this.app.completions.clear();
       else if (a.id === MENU_SESSIONS) this.app.openSessions();
       else if (a.id === MENU_HUD) this.app.popToAmbient();
+      else if (a.id === MENU_BLANK) this.app.showHud("blank");
     }
   }
 
@@ -304,5 +322,73 @@ export class PomodoroScreen implements Screen {
     const seconds = completionBannerSeconds(settings);
     const bannerTick = completionMode(settings, "pomodoro") === "banner" && seconds && this.app.completions.banner(now, seconds) ? Math.floor(now / 1000) : 0;
     return `${snapshot.phase}:${snapshot.running}:${Math.ceil(snapshot.remainingMs / 1000)}:${this.app.completions.count}:${bannerTick}`;
+  }
+}
+
+/** A zero-widget screen that still receives session completion alerts. */
+export class BlankScreen implements Screen {
+  private app: App;
+
+  constructor(app: App) {
+    this.app = app;
+  }
+
+  frame(): Frame {
+    const settings = this.app.settings.current;
+    const notice = noticeBody(this.app, Date.now());
+    const menu: MenuItem[] = [
+      { id: MENU_SESSIONS, name: "Sessions" },
+      { id: MENU_HUD, name: "Ambient HUD" },
+      { id: MENU_POMODORO, name: "Pomodoro" },
+      ...(this.app.completions.count ? [{ id: MENU_DISMISS, name: "Dismiss all alerts" }] : []),
+      { id: MENU_REFRESH, name: "Refresh" },
+      { id: MENU_EXIT, name: "Exit Terminal HUD" },
+    ];
+    if (notice) return { header: "", body: notice, menu };
+
+    const widgets: HudWidget[] = [];
+    addBell(this.app, "clock", widgets, undefined);
+    return { header: "", body: layoutWidgets(widgets), menu };
+  }
+
+  action(a: Action) {
+    const settings = this.app.settings.current;
+    const banner = completionMode(settings, "clock") === "banner" ? this.app.completions.banner(Date.now(), completionBannerSeconds(settings)) : null;
+    if (a.type === "tap") {
+      if (banner) {
+        this.app.completions.acknowledge(banner.id);
+        this.app.openSession(banner.id);
+      } else this.app.openSessions();
+    } else if (a.type === "down" && banner) {
+      this.app.completions.acknowledge(banner.id);
+      this.app.toast("Dismissed", 1200);
+    } else if (a.type === "up" || a.type === "down") {
+      this.app.showHud(cycleHudMode("blank", a.type, settings.pomodoro.inSwipeCycle));
+    } else if (a.type === "doubleTap") {
+      this.app.popToAmbient();
+    } else if (a.type === "menu") {
+      if (a.id === MENU_SESSIONS) this.app.openSessions();
+      else if (a.id === MENU_HUD) this.app.popToAmbient();
+      else if (a.id === MENU_POMODORO) this.app.openPomodoro();
+      else if (a.id === MENU_DISMISS) {
+        this.app.completions.clear();
+        this.app.toast("Alerts dismissed", 1200);
+      } else if (a.id === MENU_REFRESH) this.app.hub.refresh();
+      else if (a.id === MENU_EXIT) void this.app.bridge.shutDownPageContainer(1);
+    }
+  }
+
+  needsWake() {
+    const settings = this.app.settings.current;
+    const seconds = completionBannerSeconds(settings);
+    return completionMode(settings, "clock") === "banner" && !!seconds && !!this.app.completions.banner(Date.now(), seconds);
+  }
+
+  tickKey(now = Date.now()) {
+    const settings = this.app.settings.current;
+    const seconds = completionBannerSeconds(settings);
+    return completionMode(settings, "clock") === "banner" && seconds && this.app.completions.banner(now, seconds)
+      ? String(Math.floor(now / 1000))
+      : "";
   }
 }

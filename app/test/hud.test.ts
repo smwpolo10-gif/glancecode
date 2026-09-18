@@ -1,7 +1,34 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { CompletionInbox } from "../src/completion.ts";
 import { DEFAULT_SETTINGS } from "../src/settings.ts";
-import { formatClock, formatDate, layoutWidgets, pomodoroText, sessionStamp } from "../src/hud.ts";
+import { BlankScreen, cycleHudMode, formatClock, formatDate, layoutWidgets, pomodoroText, sessionStamp } from "../src/hud.ts";
+import type { App } from "../src/app.ts";
+
+test("HUD swipes cycle through Pomodoro only when it is enabled", () => {
+  assert.equal(cycleHudMode("ambient", "down", true), "pomodoro");
+  assert.equal(cycleHudMode("pomodoro", "down", true), "blank");
+  assert.equal(cycleHudMode("blank", "down", true), "ambient");
+  assert.equal(cycleHudMode("ambient", "up", true), "blank");
+  assert.equal(cycleHudMode("blank", "up", true), "pomodoro");
+  assert.equal(cycleHudMode("pomodoro", "up", true), "ambient");
+
+  assert.equal(cycleHudMode("ambient", "down", false), "blank");
+  assert.equal(cycleHudMode("blank", "down", false), "ambient");
+  assert.equal(cycleHudMode("ambient", "up", false), "blank");
+  assert.equal(cycleHudMode("blank", "up", false), "ambient");
+});
+
+test("blank HUD draws nothing until a completion alert arrives", () => {
+  const completions = new CompletionInbox();
+  const app = { settings: { current: DEFAULT_SETTINGS }, completions } as unknown as App;
+  const screen = new BlankScreen(app);
+  assert.ok(screen.frame().body.every((line) => line === ""));
+
+  completions.ingest([{ id: "done", project: "Pillbee", message: "Finished", at: Date.now() }]);
+  const alert = screen.frame().body.join("\n");
+  assert.match(alert, /Pillbee finished/);
+});
 
 test("clock defaults to 12-hour time without seconds", () => {
   const at = new Date(2026, 8, 18, 13, 5, 42);

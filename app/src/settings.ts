@@ -51,6 +51,7 @@ export interface TerminalHudSettings {
     bannerDurationSeconds: BannerDurationSeconds;
   };
   pomodoro: WidgetPlacement & {
+    inSwipeCycle: boolean;
     workMinutes: number;
     shortBreakMinutes: number;
     longBreakMinutes: number;
@@ -110,6 +111,7 @@ export const DEFAULT_SETTINGS: TerminalHudSettings = {
     bannerDurationSeconds: 0,
   },
   pomodoro: {
+    inSwipeCycle: true,
     workMinutes: 25,
     shortBreakMinutes: 5,
     longBreakMinutes: 15,
@@ -225,6 +227,7 @@ export function normalizeSettings(value: unknown): TerminalHudSettings {
     },
     pomodoro: {
       ...placement(pomodoro, d.pomodoro),
+      inSwipeCycle: bool(pomodoro.inSwipeCycle, d.pomodoro.inSwipeCycle),
       workMinutes: int(pomodoro.workMinutes, d.pomodoro.workMinutes, 1, 180),
       shortBreakMinutes: int(pomodoro.shortBreakMinutes, d.pomodoro.shortBreakMinutes, 1, 60),
       longBreakMinutes: int(pomodoro.longBreakMinutes, d.pomodoro.longBreakMinutes, 1, 120),

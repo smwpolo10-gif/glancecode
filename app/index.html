@@ -20,6 +20,7 @@
             <div class="segmented" aria-label="Preview screen">
               <button type="button" class="selected" data-preview-mode="hud">HUD</button>
               <button type="button" data-preview-mode="pomodoro">Pomodoro</button>
+              <button type="button" data-preview-mode="blank">Blank</button>
             </div>
           </div>
           <div class="hud-preview-shell"><div id="hud-preview-screen"></div></div>
@@ -105,7 +106,7 @@
         <details open>
           <summary>Completion alerts</summary>
           <div class="settings-body settings-grid">
-            <label class="field">While viewing the clock
+            <label class="field">While viewing time or blank HUD
               <select id="completion-clock-mode"><option value="off">Off</option><option value="bell">Numbered bell</option><option value="banner">Banner</option></select>
             </label>
             <label class="field">While viewing Pomodoro
@@ -134,6 +135,7 @@
         <details>
           <summary>Pomodoro</summary>
           <div class="settings-body settings-grid">
+            <label class="toggle field full">Include Pomodoro in glasses swipe cycle <input id="pomodoro-in-swipe-cycle" type="checkbox" /></label>
             <label class="field">Focus
               <input id="pomodoro-work" type="number" min="1" max="180" inputmode="numeric" /><span class="hint">minutes</span>
             </label>
@@ -156,7 +158,7 @@
               <input id="pomodoro-position" type="hidden" />
               <div class="position-grid" data-position-grid="pomodoro-position" aria-label="Pomodoro position"></div>
             </div>
-            <p class="hint full">Pomodoro always shows minutes and seconds.</p>
+            <p class="hint full">Turn this off for a two-screen cycle: Time ↔ Blank. The timer keeps its state if you remove its screen. Pomodoro always shows minutes and seconds when included.</p>
           </div>
         </details>
 

@@ -3,7 +3,7 @@ import { AudioInputSource, ImuReportPace, type DeviceStatus, type EvenAppBridge 
 import { every, later, type Cancel } from "./timers.ts";
 import { BODY_INNER_W, BODY_LINES, HEADER_INNER_W, Display, type Frame, type MenuItem } from "./display.ts";
 import { GLYPH, ago, formatContext, itemsToLines, shortModel, stateLabel } from "./format.ts";
-import { AmbientScreen, PomodoroScreen, sessionStamp } from "./hud.ts";
+import { AmbientScreen, BlankScreen, PomodoroScreen, sessionStamp, type HudMode } from "./hud.ts";
 import type { Hub } from "./hub.ts";
 import type { Action } from "./input.ts";
 import { CompletionInbox } from "./completion.ts";
@@ -95,7 +95,7 @@ export class App {
     this.tickTimer = every(() => {
       if (this.voice.phase === "recording") this.render();
       const top = this.top;
-      if (top instanceof AmbientScreen || top instanceof PomodoroScreen) {
+      if (top instanceof AmbientScreen || top instanceof PomodoroScreen || top instanceof BlankScreen) {
         const key = top.tickKey();
         if (key !== this.tickKey) {
           this.tickKey = key;
@@ -155,7 +155,18 @@ export class App {
   }
 
   openPomodoro() {
-    if (!(this.top instanceof PomodoroScreen)) this.push(new PomodoroScreen(this));
+    this.showHud("pomodoro");
+  }
+
+  showHud(mode: HudMode) {
+    if (mode === "ambient") {
+      this.popToAmbient();
+      return;
+    }
+    const screen = mode === "pomodoro" ? new PomodoroScreen(this) : new BlankScreen(this);
+    if (this.top instanceof AmbientScreen) this.push(screen);
+    else if (this.top instanceof PomodoroScreen || this.top instanceof BlankScreen) this.replace(screen);
+    else this.push(screen);
   }
 
   popToAmbient() {
@@ -233,11 +244,12 @@ export class App {
       (top instanceof SessionScreen && top.isActive()) ||
       (top instanceof AmbientScreen && top.needsWake()) ||
       (top instanceof PomodoroScreen && top.needsWake()) ||
+      (top instanceof BlankScreen && top.needsWake()) ||
       ((top instanceof HomeScreen || top instanceof SessionScreen) && (this.settings.current.sessions.showTime || this.settings.current.sessions.showDate)) ||
-      ((top instanceof AmbientScreen || top instanceof PomodoroScreen) && [...this.hub.sessions.values()].some((s) => s.state === "working" || s.state === "starting" || s.state === "waiting"));
+      ((top instanceof AmbientScreen || top instanceof PomodoroScreen || top instanceof BlankScreen) && [...this.hub.sessions.values()].some((s) => s.state === "working" || s.state === "starting" || s.state === "waiting"));
     this.keepAwake(screenNeedsWake && this.voice.phase === "idle");
     let frame: Frame;
-    if (!this.hub.connected && this.hub.sessions.size === 0 && !(top instanceof AmbientScreen) && !(top instanceof PomodoroScreen)) {
+    if (!this.hub.connected && this.hub.sessions.size === 0 && !(top instanceof AmbientScreen) && !(top instanceof PomodoroScreen) && !(top instanceof BlankScreen)) {
       frame = {
         header: spread("Sessions", "offline", HEADER_INNER_W),
         body: wrap(`Can't reach the hub at ${this.hub.cfg.url}. Retrying.\n\nOn your computer run: glancecode doctor\n${this.hub.lastError ? `(${this.hub.lastError})` : ""}`, BODY_INNER_W),

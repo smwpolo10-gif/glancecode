@@ -28,6 +28,7 @@ test("defaults match the personal Terminal HUD setup", () => {
   assert.equal(settings.completion.pomodoroMode, "bell");
   assert.equal(settings.completion.bannerDurationSeconds, 0);
   assert.equal(settings.pomodoro.breakLabel, "off");
+  assert.equal(settings.pomodoro.inSwipeCycle, true);
   assert.equal(settings.battery.hud.visible, false);
   assert.equal(settings.battery.pomodoro.visible, false);
   assert.equal(settings.battery.sessions.visible, false);
@@ -45,7 +46,7 @@ test("normalization preserves valid settings and clamps unsafe numbers", () => {
       date: { format: "numeric" },
     },
     completion: { clockMode: "bell", pomodoroMode: "off", bellPlacement: "opposite-corner", bannerDurationSeconds: 5 },
-    pomodoro: { workMinutes: 500, shortBreakMinutes: 0, longBreakMinutes: 31.7, roundsBeforeLongBreak: 30, breakLabel: "b" },
+    pomodoro: { inSwipeCycle: false, workMinutes: 500, shortBreakMinutes: 0, longBreakMinutes: 31.7, roundsBeforeLongBreak: 30, breakLabel: "b" },
     battery: {
       format: "label",
       showCharging: false,
@@ -77,6 +78,7 @@ test("normalization preserves valid settings and clamps unsafe numbers", () => {
   assert.equal(settings.pomodoro.longBreakMinutes, 32);
   assert.equal(settings.pomodoro.roundsBeforeLongBreak, 12);
   assert.equal(settings.pomodoro.breakLabel, "b");
+  assert.equal(settings.pomodoro.inSwipeCycle, false);
   assert.equal(settings.battery.format, "label");
   assert.deepEqual(settings.battery.hud, { visible: true, position: "bottom-left", size: "large" });
   assert.equal(settings.battery.pomodoro.visible, true);
