@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getTextWidth } from "@evenrealities/pretext";
 import { padTo, sanitize, spread, truncate, wrap } from "../src/text.ts";
-import { itemsToLines, shortModel, tidyMarkdown } from "../src/format.ts";
+import { formatContext, itemsToLines, shortModel, tidyMarkdown } from "../src/format.ts";
 import type { Item } from "../src/types.ts";
 
 const W = 568;
@@ -71,4 +71,13 @@ test("model names shorten", () => {
   assert.equal(shortModel("gpt-5.6-sol"), "GPT-5.6-sol");
   assert.equal(shortModel("gemini-3.5-flash"), "Gemini 3.5 Flash");
   assert.equal(shortModel("claude-haiku-4-5-20251001"), "Haiku 4.5");
+});
+
+test("context usage stays compact enough for the session header", () => {
+  assert.equal(formatContext(null), "");
+  assert.equal(formatContext(842), "842");
+  assert.equal(formatContext(4_250), "4.3k");
+  assert.equal(formatContext(42_000), "42k");
+  assert.equal(formatContext(542_400), "542k");
+  assert.equal(formatContext(1_040_000), "1.0M");
 });

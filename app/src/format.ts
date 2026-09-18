@@ -29,6 +29,14 @@ export function shortModel(model: string | null): string {
   return m[2] ? `${name} ${m[2].replace("-", ".")}` : name;
 }
 
+export function formatContext(tokens: number | null): string {
+  if (!tokens || tokens < 0) return "";
+  if (tokens < 1_000) return String(Math.round(tokens));
+  if (tokens < 100_000) return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
+  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
+  return `${(tokens / 1_000_000).toFixed(1)}M`;
+}
+
 export function ago(ms: number, now = Date.now()): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));
   if (s < 60) return "now";

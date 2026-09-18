@@ -67,6 +67,7 @@ export interface TerminalHudSettings {
   sessions: {
     showTime: boolean;
     showDate: boolean;
+    showContext: boolean;
     showHistory: boolean;
   };
   openTerminalOnLaunch: boolean;
@@ -127,6 +128,7 @@ export const DEFAULT_SETTINGS: TerminalHudSettings = {
   sessions: {
     showTime: true,
     showDate: false,
+    showContext: true,
     showHistory: true,
   },
   openTerminalOnLaunch: true,
@@ -244,6 +246,7 @@ export function normalizeSettings(value: unknown): TerminalHudSettings {
     sessions: {
       showTime: bool(sessions.showTime, d.sessions.showTime),
       showDate: bool(sessions.showDate, d.sessions.showDate),
+      showContext: bool(sessions.showContext, d.sessions.showContext),
       showHistory: bool(sessions.showHistory, d.sessions.showHistory),
     },
     openTerminalOnLaunch: bool(root.openTerminalOnLaunch, d.openTerminalOnLaunch),

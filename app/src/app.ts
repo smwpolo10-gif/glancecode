@@ -2,7 +2,7 @@
 import { AudioInputSource, ImuReportPace, type DeviceStatus, type EvenAppBridge } from "@evenrealities/even_hub_sdk";
 import { every, later, type Cancel } from "./timers.ts";
 import { BODY_INNER_W, BODY_LINES, HEADER_INNER_W, Display, type Frame, type MenuItem } from "./display.ts";
-import { GLYPH, ago, itemsToLines, shortModel, stateLabel } from "./format.ts";
+import { GLYPH, ago, formatContext, itemsToLines, shortModel, stateLabel } from "./format.ts";
 import { AmbientScreen, PomodoroScreen, sessionStamp } from "./hud.ts";
 import type { Hub } from "./hub.ts";
 import type { Action } from "./input.ts";
@@ -607,15 +607,15 @@ class HomeScreen implements Screen {
 
 function sessionMenu(models: ModelChoice[], agent: Agent, controllable = false): MenuItem[] {
   return [
-    { id: 1, name: "Interrupt" },
-    { id: 2, name: "Jump to latest" },
+    ...(agent === "codex" ? [] : [{ id: 8, name: "Clear conversation" }]),
+    ...(agent === "claude" ? [{ id: 5, name: "Resume" }] : []),
     ...(models.length ? [{ id: 3, name: "Switch Model" }] : []),
     ...(agent === "claude" ? [{ id: 4, name: "Change effort" }] : []),
-    { id: 6, name: "Compact" },
-    ...(agent === "claude" ? [{ id: 5, name: "Resume" }] : []),
-    ...(agent === "codex" ? [] : [{ id: 8, name: "Clear conversation" }]),
+    { id: 1, name: "Interrupt" },
+    { id: 2, name: "Jump to latest" },
     ...(controllable ? [{ id: 9, name: "End session" }] : []),
     { id: 7, name: "Refresh" },
+    { id: 6, name: "Compact" },
   ];
 }
 
@@ -739,6 +739,8 @@ class SessionScreen implements Screen {
     if (!following && s.waiting) rightParts.push("◆ tap");
     const model = shortModel(s.model);
     rightParts.push(s.controllable ? `${model}${s.effort ? ` · ${s.effort}` : ""}` : "view only");
+    const context = formatContext(s.context);
+    if (this.app.settings.current.sessions.showContext && context) rightParts.push(`ctx ${context}`);
     const stamp = sessionStamp(this.app.settings.current);
     if (this.app.settings.current.battery.transcript.visible) rightParts.push(this.app.batteryText() || "");
     if (stamp) rightParts.push(stamp);

@@ -32,6 +32,7 @@ test("defaults match the personal Terminal HUD setup", () => {
   assert.equal(settings.battery.pomodoro.visible, false);
   assert.equal(settings.battery.sessions.visible, false);
   assert.equal(settings.battery.transcript.visible, false);
+  assert.equal(settings.sessions.showContext, true);
   assert.equal(settings.openTerminalOnLaunch, true);
 });
 
