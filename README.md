@@ -120,7 +120,8 @@ Sessions started any other way still appear on the glasses, marked view only.
 
 This private fork passes `--dangerously-skip-permissions` to Claude sessions
 started or resumed from the glasses. Treat the pairing token as equivalent to
-control of the logged-in macOS account.
+control of the logged-in macOS account. Codex and Gemini integrations are off
+in this build so the hub only reads and controls Claude Code.
 
 Gemini CLI is the same:
 

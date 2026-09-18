@@ -40,11 +40,10 @@ const DEFAULTS = {
   // macOS: hold the machine awake while the hub runs, so the glasses can reach it.
   // Only while plugged in; on battery the Mac still sleeps normally.
   preventSleep: true,
-  // Codex CLI sessions: "auto" follows them when the codex command is installed.
-  codex: "auto",
+  // Shane's private build only exposes Claude Code.
+  codex: false,
   codexBin: "codex",
-  // Gemini CLI sessions: "auto" follows them when the gemini command is installed.
-  gemini: "auto",
+  gemini: false,
   geminiBin: "gemini",
   // Extra arguments for Gemini sessions the glasses start.
   geminiArgs: [],

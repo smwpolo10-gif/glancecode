@@ -629,7 +629,8 @@ function removeHooks(path) {
 }
 
 function geminiInstalled() {
-  return existsSync(dirname(GEMINI_SETTINGS)) || !!findCodex(loadConfig().geminiBin, { exclude: [ROOT] });
+  const cfg = loadConfig();
+  return cfg.gemini !== false && (existsSync(dirname(GEMINI_SETTINGS)) || !!findCodex(cfg.geminiBin, { exclude: [ROOT] }));
 }
 
 function findRealClaude() {
