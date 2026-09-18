@@ -56,8 +56,8 @@ codex (terminal) ──▶ Codex app server ◀── hub ◀── tailscale se
 - Hold to talk. Words appear while you speak. Release to review, then tap to send.
 - Start a new session in a recent project with any installed agent, or resume a
   past session.
-- A menu to interrupt, compact, or switch the session's model without changing
-  your default.
+- A menu to interrupt, compact, clear, or switch the session's model without
+  changing your default. Clear asks for a second confirmation on the glasses.
 
 ## Requirements
 
@@ -118,6 +118,10 @@ alias claude='glancecode claude'   # optional, in your shell rc
 
 Sessions started any other way still appear on the glasses, marked view only.
 
+This private fork passes `--dangerously-skip-permissions` to Claude sessions
+started or resumed from the glasses. Treat the pairing token as equivalent to
+control of the logged-in macOS account.
+
 Gemini CLI is the same:
 
 ```bash
@@ -148,7 +152,7 @@ live. Past sessions from all of them do appear under Resume on the glasses.
 | Tap | open | choose the highlighted option, or jump to the latest |
 | Hold | talk to the highlighted session | talk, or answer an open question; hold again to redo |
 | Double-tap | exit | back |
-| Tap then hold | menu | interrupt, jump to latest, switch model, compact |
+| Tap then hold | menu | interrupt, jump to latest, switch model, compact, clear |
 
 At your desk:
 

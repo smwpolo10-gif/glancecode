@@ -482,14 +482,15 @@ class HomeScreen implements Screen {
 
 // Model entries take menu ids from 100 up; the glasses menu holds ten items.
 const MODEL_MENU_BASE = 100;
-const MAX_MODEL_ITEMS = 6;
+const MAX_MODEL_ITEMS = 5;
 
-function sessionMenu(models: ModelChoice[]): MenuItem[] {
+function sessionMenu(models: ModelChoice[], agent: Agent): MenuItem[] {
   return [
     { id: 1, name: "Interrupt" },
     { id: 2, name: "Jump to latest" },
     ...models.slice(0, MAX_MODEL_ITEMS).map((m, i) => ({ id: MODEL_MENU_BASE + i, name: `Use ${m.name}` })),
     { id: 6, name: "Compact" },
+    ...(agent === "codex" ? [] : [{ id: 8, name: "Clear conversation" }]),
     { id: 7, name: "Refresh" },
   ];
 }
@@ -590,7 +591,7 @@ class SessionScreen implements Screen {
 
   frame(): Frame {
     const s = this.session;
-    const menu = sessionMenu(this.models);
+    const menu = sessionMenu(this.models, agentOf(s));
     if (!s) return { header: "Session closed", body: wrap("This session is no longer running. Double-tap to go back.", BODY_INNER_W), menu };
     const items = this.app.hub.items.get(this.id);
     if (!items) this.app.hub.ensureItems(this.id); // self-heal if the cache was dropped
@@ -652,6 +653,8 @@ class SessionScreen implements Screen {
         } else if (a.id === 6) {
           await this.app.hub.command(this.id, "/compact");
           this.app.toast("Compacting");
+        } else if (a.id === 8 && agentOf(s) !== "codex") {
+          this.app.push(new ClearConversationScreen(this.app, this.id, s?.project || "this session"));
         } else if (a.id >= MODEL_MENU_BASE) {
           const model = this.models[a.id - MODEL_MENU_BASE];
           if (model) {
@@ -674,6 +677,31 @@ class SessionScreen implements Screen {
       else await this.app.hub.prompt(this.id, text);
       this.scroll = 0;
     };
+  }
+}
+
+class ClearConversationScreen implements Screen {
+  constructor(private app: App, private id: string, private project: string) {}
+
+  frame(): Frame {
+    return {
+      header: "Clear conversation?",
+      body: wrap(
+        `This starts a fresh conversation in ${this.project}. The existing transcript stays in Claude's history.\n\nTap to clear · double-tap to cancel`,
+        BODY_INNER_W,
+      ),
+    };
+  }
+
+  async action(a: Action) {
+    if (a.type === "doubleTap") {
+      this.app.pop();
+    } else if (a.type === "tap") {
+      await this.app.hub.command(this.id, "/clear");
+      this.app.pop();
+      this.app.pop();
+      this.app.toast("Conversation cleared");
+    }
   }
 }
 
