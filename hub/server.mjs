@@ -42,7 +42,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
   const log = (...a) => {
     if (!quiet) console.log(`[${new Date().toLocaleTimeString()}]`, ...a);
   };
-  const registry = new Registry();
+  const registry = new Registry({ allowedRoots: cfg.allowedRoots });
   const transcriber = new Transcriber({ port: cfg.whisperPort, model: cfg.whisperModel, log });
   const notifier = new Notifier({ server: cfg.ntfyServer, topic: cfg.ntfyTopic, log });
 
@@ -183,7 +183,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
 
   function vocabulary() {
     const names = new Set(registry.list().map((s) => s.project));
-    for (const p of recentProjects(10)) names.add(p.project);
+    for (const p of recentProjects(10, { allowedRoots: cfg.allowedRoots })) names.add(p.project);
     return `${cfg.sttVocabulary}${codex ? ", Codex" : ""}${geminiBin ? ", Gemini" : ""}, ${[...names].join(", ")}`;
   }
 
@@ -204,6 +204,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
       if (live && live.state !== "ended") throw new HttpError(409, "that session is already open");
     }
     if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new HttpError(400, "cwd must be an existing folder");
+    if (!registry.allows(cwd)) throw new HttpError(403, "that folder is outside this hub's allowed roots");
     if (agent === "gemini" && !geminiBin) throw new HttpError(503, "Gemini CLI isn't installed on this computer");
     const gemini = agent === "gemini";
     const args = [...((gemini ? cfg.geminiArgs : cfg.claudeArgs) || []), ...(resume ? ["--resume", resume] : [])];
@@ -261,14 +262,14 @@ export function startHub({ quiet = false, feed = true } = {}) {
 
     if (method === "GET" && path === "/api/recent") {
       const liveIds = new Set(registry.list().filter((s) => s.state !== "ended").map((s) => s.id));
-      const claude = recentTranscripts({ liveIds, limit: 15 }).map((t) => ({ ...t, agent: "claude" }));
+      const claude = recentTranscripts({ liveIds, limit: 15, allowedRoots: cfg.allowedRoots }).map((t) => ({ ...t, agent: "claude" }));
       const codexRecent = codex ? await codex.recent({ limit: 15, liveIds }).catch(() => []) : [];
       const geminiRecent = geminiBin ? recentGeminiSessions({ liveIds, limit: 15 }) : [];
       for (const g of geminiRecent) geminiThreads.add(g.id);
       const others = [...codexRecent, ...geminiRecent];
       const sessions = [...claude, ...others].sort((a, b) => b.mtime - a.mtime).slice(0, 20);
       // A project counts as recent for either agent.
-      const projects = new Map(recentProjects(15).map((p) => [p.cwd, p]));
+      const projects = new Map(recentProjects(15, { allowedRoots: cfg.allowedRoots }).map((p) => [p.cwd, p]));
       for (const t of others) if (!projects.has(t.cwd) || projects.get(t.cwd).mtime < t.mtime) projects.set(t.cwd, { cwd: t.cwd, project: t.project, mtime: t.mtime });
       return send(res, 200, { agents, projects: [...projects.values()].sort((a, b) => b.mtime - a.mtime).slice(0, 15), sessions });
     }

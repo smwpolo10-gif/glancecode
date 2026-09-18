@@ -1,8 +1,8 @@
 // Session registry: fed by Claude Code hooks, enriched from transcripts,
 // checked against live processes and tmux panes.
 import { EventEmitter } from "node:events";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { CLAUDE_PROJECTS_DIR, STATE_FILE } from "./config.mjs";
 import { entryMeta, entryToItems, parseLine, readTailLines, toolLabel, TranscriptTail } from "./transcript.mjs";
 import { geminiEntryMeta, geminiEntryToItems, geminiSessionFile, isGeminiSubagentTranscript, isGeminiTranscript, normalizeGeminiHook } from "./gemini.mjs";
@@ -10,6 +10,29 @@ import { capture, paneAlive, paneKey, readDialog, socketFromTmuxEnv } from "./tm
 
 const MAX_ITEMS = 300;
 const HISTORY_ITEMS = 150; // how much history to load when the hub starts watching a session
+
+function canonical(path) {
+  if (!path) return "";
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function within(path, roots) {
+  if (!roots.length) return true;
+  const target = canonical(path);
+  if (!target) return false;
+  return roots.some((root) => {
+    const rel = relative(root, target);
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`));
+  });
+}
+
+function projectDir(cwd) {
+  return join(CLAUDE_PROJECTS_DIR, resolve(cwd).replace(/[^A-Za-z0-9-]/g, "-"));
+}
 
 function pidAlive(pid) {
   if (!pid) return false;
@@ -101,11 +124,16 @@ export class Session {
 }
 
 export class Registry extends EventEmitter {
-  constructor() {
+  constructor({ allowedRoots = [] } = {}) {
     super();
+    this.allowedRoots = allowedRoots.filter(Boolean).map(canonical);
     /** @type {Map<string, Session>} */
     this.sessions = new Map();
     this.saveTimer = null;
+  }
+
+  allows(cwd) {
+    return within(cwd, this.allowedRoots);
   }
 
   // ---------- persistence ----------
@@ -120,6 +148,7 @@ export class Registry extends EventEmitter {
     }
     for (const s of saved.sessions || []) {
       if (!s.id || !s.transcriptPath) continue;
+      if (!this.allows(s.cwd)) continue;
       if (!pidAlive(s.pid)) continue; // only restore sessions whose process still runs
       const session = new Session(s);
       Object.assign(session, { agent: s.agent === "gemini" ? "gemini" : "claude", tmux: s.tmux, pid: s.pid, origin: s.origin || "terminal", tmuxName: s.tmuxName || null });
@@ -249,8 +278,10 @@ export class Registry extends EventEmitter {
     const event = payload?.hook_event_name;
     if (!id || !event) return;
     if (payload.agent_id) return; // subagent-level hooks: the parent session's state is what matters
+    const known = this.sessions.get(id);
+    if (!this.allows(payload.cwd || known?.cwd)) return;
 
-    let session = this.sessions.get(id);
+    let session = known;
     if (!session) {
       if (event === "SessionEnd") return;
       session = new Session({ id, cwd: payload.cwd, transcriptPath: payload.transcript_path });
@@ -421,12 +452,15 @@ export class Registry extends EventEmitter {
  * Recent sessions on disk that are not live, for "resume" on the glasses.
  * @returns {{id: string, cwd: string, project: string, title: string, mtime: number}[]}
  */
-export function recentTranscripts({ liveIds = new Set(), days = 14, limit = 30 } = {}) {
+export function recentTranscripts({ liveIds = new Set(), days = 14, limit = 30, allowedRoots = [] } = {}) {
   const out = [];
   const cutoff = Date.now() - days * 86_400_000;
+  const roots = allowedRoots.filter(Boolean).map(canonical);
   let dirs = [];
   try {
-    dirs = readdirSync(CLAUDE_PROJECTS_DIR);
+    dirs = roots.length
+      ? roots.map(projectDir).filter(existsSync).map(basename)
+      : readdirSync(CLAUDE_PROJECTS_DIR);
   } catch {
     return out;
   }
@@ -480,13 +514,13 @@ export function recentTranscripts({ liveIds = new Set(), days = 14, limit = 30 }
       /* unreadable */
     }
     return { id, cwd, project: basename(cwd || "") || "?", title: title || firstPrompt.slice(0, 60), mtime };
-  });
+  }).filter((t) => within(t.cwd, roots));
 }
 
 /** Distinct project folders from recent transcripts, most recent first. */
-export function recentProjects(limit = 15) {
+export function recentProjects(limit = 15, { allowedRoots = [] } = {}) {
   const seen = new Map();
-  for (const t of recentTranscripts({ days: 60, limit: 200 })) {
+  for (const t of recentTranscripts({ days: 60, limit: 200, allowedRoots })) {
     if (t.cwd && !seen.has(t.cwd) && existsSync(t.cwd)) seen.set(t.cwd, t.mtime);
   }
   return [...seen.entries()].slice(0, limit).map(([cwd, mtime]) => ({ cwd, project: basename(cwd), mtime }));

@@ -37,6 +37,9 @@ const DEFAULTS = {
   // Shane's private build keeps the same permission mode he uses at the Mac.
   // This only affects sessions explicitly started or resumed through GlanceCode.
   claudeArgs: ["--dangerously-skip-permissions"],
+  // Empty in upstream. This private build's config restricts the hub to its
+  // disposable test project so hooks from normal sessions are ignored.
+  allowedRoots: [],
   // macOS: hold the machine awake while the hub runs, so the glasses can reach it.
   // Only while plugged in; on battery the Mac still sleeps normally.
   preventSleep: true,

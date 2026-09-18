@@ -1,10 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { entryMeta, entryToItems, toolLabel, TranscriptTail } from "../hub/transcript.mjs";
 import { readDialog } from "../hub/tmux.mjs";
+import { Registry } from "../hub/sessions.mjs";
+
+test("registry ignores hooks outside its allowed roots", () => {
+  const dir = mkdtempSync(join(tmpdir(), "glancecode-roots-"));
+  const allowed = join(dir, "allowed");
+  const blocked = join(dir, "blocked");
+  mkdirSync(allowed);
+  mkdirSync(blocked);
+  const registry = new Registry({ allowedRoots: [allowed] });
+  registry.handleHook({ session_id: "blocked", hook_event_name: "SessionStart", cwd: blocked, transcript_path: join(blocked, "blocked.jsonl") });
+  assert.equal(registry.sessions.size, 0);
+
+  const transcript = join(allowed, "allowed.jsonl");
+  writeFileSync(transcript, "");
+  registry.handleHook({ session_id: "allowed", hook_event_name: "SessionStart", cwd: allowed, transcript_path: transcript });
+  assert.equal(registry.sessions.size, 1);
+  registry.sessions.get("allowed")?.tail?.close();
+});
 
 test("user prompt becomes a user item; injected context is dropped", () => {
   assert.deepEqual(entryToItems({ type: "user", uuid: "u1", message: { content: "fix the build" } }).map((i) => i.kind), ["user"]);
