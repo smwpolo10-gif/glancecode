@@ -233,7 +233,7 @@ export class Hub {
     return this.req<{ dialog: { kind: string; options: string[] } }>("POST", `/api/sessions/${id}/screen`, {});
   }
   command(id: string, command: string) {
-    return this.req("POST", `/api/sessions/${id}/command`, { command });
+    return this.req<{ ok: boolean; session?: SessionSummary }>("POST", `/api/sessions/${id}/command`, { command });
   }
   recent() {
     return this.req<{ agents?: Agent[]; projects: RecentProject[]; sessions: RecentSession[] }>("GET", "/api/recent");

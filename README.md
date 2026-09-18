@@ -155,6 +155,12 @@ live. Past sessions from all of them do appear under Resume on the glasses.
 | Double-tap | exit | back |
 | Tap then hold | menu | interrupt, jump to latest, switch model, compact, clear |
 
+While viewing a session, hold to dictate an ordinary prompt. To invoke a safe
+slash command instead, say `slash clear`, `slash resume`, `slash compact`,
+`slash context`, `slash cost`, or `slash model opus` (also sonnet, fable, or
+haiku), release, review the transcript, and tap to send. Clear still asks for a
+second tap and then follows the fresh conversation automatically.
+
 At your desk:
 
 | Command | What it does |
@@ -167,6 +173,9 @@ At your desk:
 
 Closing a terminal window only detaches from tmux. The session keeps running and
 the glasses can still reach it.
+
+Run `glancecode attach [name]` to use the same live session from a computer
+terminal while the glasses remain connected.
 
 ## Security
 

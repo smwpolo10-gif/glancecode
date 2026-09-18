@@ -122,6 +122,20 @@ export function readDialog(screen, agent = "claude") {
   return { kind: "unknown", options: clean };
 }
 
+/** Read Claude Code's current effort from its status line, e.g. "xhigh · /effort". */
+export function readEffort(screen) {
+  const text = String(screen || "");
+  const match = /\b([a-z][a-z-]*)\s*·\s*\/effort\b/i.exec(text) || /\bwith\s+([a-z][a-z-]*)\s+effort\b/i.exec(text);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/** Read the model label from Claude Code's startup banner before a transcript exists. */
+export function readClaudeModel(screen) {
+  const match = /\b(opus|sonnet|haiku|fable)\s+(\d+(?:\.\d+)?)\s+\([^)]*context\)\s+with\s+[a-z][a-z-]*\s+effort\b/i.exec(String(screen || ""));
+  if (!match) return null;
+  return `${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()} ${match[2]}`;
+}
+
 /**
  * Scrolling with the mouse in an attached tmux client puts the pane in copy mode,
  * where typed keys become copy-mode commands and never reach Claude Code.

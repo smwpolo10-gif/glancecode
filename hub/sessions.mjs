@@ -4,9 +4,9 @@ import { EventEmitter } from "node:events";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { CLAUDE_PROJECTS_DIR, STATE_FILE } from "./config.mjs";
-import { entryMeta, entryToItems, parseLine, readTailLines, toolLabel, TranscriptTail } from "./transcript.mjs";
+import { entryMeta, entryToItems, isLocalCommandOutput, parseLine, readTailLines, toolLabel, TranscriptTail } from "./transcript.mjs";
 import { geminiEntryMeta, geminiEntryToItems, geminiSessionFile, isGeminiSubagentTranscript, isGeminiTranscript, normalizeGeminiHook } from "./gemini.mjs";
-import { capture, paneAlive, paneKey, readDialog, socketFromTmuxEnv } from "./tmux.mjs";
+import { capture, paneAlive, paneKey, readClaudeModel, readDialog, readEffort, socketFromTmuxEnv } from "./tmux.mjs";
 
 const MAX_ITEMS = 300;
 const HISTORY_ITEMS = 150; // how much history to load when the hub starts watching a session
@@ -65,6 +65,7 @@ export class Session {
     /** @type {null | {kind: "permission"|"question", tool?: string, detail?: string, questions?: any[], questionIndex?: number}} */
     this.waiting = null;
     this.model = null;
+    this.effort = null;
     this.context = null;
     this.permissionMode = null;
     this.title = null;
@@ -94,6 +95,7 @@ export class Session {
       activity: this.activity,
       waiting: this.waiting,
       model: this.model,
+      effort: this.effort,
       context: this.context,
       permissionMode: this.permissionMode,
       title: this.title,
@@ -233,6 +235,7 @@ export class Registry extends EventEmitter {
     if (meta) {
       if (meta.title) session.title = meta.title;
       if (meta.model) session.model = meta.model;
+      if (meta.effort) session.effort = meta.effort;
       if (meta.context) session.context = meta.context;
       if (meta.summary) session.summary = meta.summary;
       if (meta.permissionMode) session.permissionMode = meta.permissionMode;
@@ -240,6 +243,15 @@ export class Registry extends EventEmitter {
     const fresh = this.addItems(session, gemini ? geminiEntryToItems(entry) : entryToItems(entry), false);
     if (live && fresh.length) {
       session.lastActivity = Date.now();
+      // Commands such as /context and /effort run inside Claude's TUI and do not
+      // emit a Stop hook. Their stdout record is the reliable completion signal.
+      if (!gemini && isLocalCommandOutput(entry)) {
+        session.state = "idle";
+        session.waiting = null;
+        session.activity = "";
+        session.stoppedAt = Date.now();
+        this.changed(session);
+      }
       // Interrupts and declined permissions end the turn without a Stop hook.
       if (fresh.some((i) => i.kind === "notice" && i.text === "Interrupted")) {
         session.state = "idle";
@@ -405,6 +417,25 @@ export class Registry extends EventEmitter {
           alive = false;
         }
       }
+      if (alive && s.tmux && s.agent === "claude") {
+        try {
+          const screen = await capture(s.tmux, 20);
+          const effort = readEffort(screen);
+          const model = readClaudeModel(screen);
+          let changed = false;
+          if (effort && effort !== s.effort) {
+            s.effort = effort;
+            changed = true;
+          }
+          if (model && !s.model) {
+            s.model = model;
+            changed = true;
+          }
+          if (changed) this.changed(s);
+        } catch {
+          /* pane busy or gone */
+        }
+      }
       // A waiting state with no dialog on screen is stale (answered at the desk,
       // declined, or interrupted without a hook). Clear it after two checks.
       if (alive && s.tmux && s.waiting) {
@@ -441,6 +472,17 @@ export class Registry extends EventEmitter {
 
   changed(session) {
     this.emit("session", session);
+  }
+
+  /** Remove a live-list entry once its replacement is ready (for example after /clear). */
+  remove(id) {
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    session.tail?.close();
+    this.sessions.delete(id);
+    this.emit("removed", session);
+    this.scheduleSave();
+    return true;
   }
 
   list() {

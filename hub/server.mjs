@@ -216,11 +216,11 @@ export function startHub({ quiet = false, feed = true } = {}) {
     return { name, target };
   }
 
-  async function waitForSessionOnPane(target, ms = 25_000) {
+  async function waitForSessionOnPane(target, ms = 25_000, excludeId = null) {
     const key = tmuxCtl.paneKey(target);
     const until = Date.now() + ms;
     while (Date.now() < until) {
-      const s = registry.list().find((x) => x.state !== "ended" && tmuxCtl.paneKey(x.tmux) === key);
+      const s = registry.list().find((x) => x.id !== excludeId && x.state !== "ended" && tmuxCtl.paneKey(x.tmux) === key);
       if (s) return s;
       await new Promise((r) => setTimeout(r, 250));
     }
@@ -401,8 +401,19 @@ export function startHub({ quiet = false, feed = true } = {}) {
           log(`→ ${s.project}: /model ${withWindow} (default left unchanged)`);
           return send(res, 200, { ok: true });
         }
-        await tmuxCtl.sendPrompt(controllable(s), command);
+        const target = controllable(s);
+        await tmuxCtl.sendPrompt(target, command);
         log(`→ ${s.project}: ${command}`);
+        if (command === "/clear") {
+          const replacement = await waitForSessionOnPane(target, 12_000, s.id);
+          if (replacement) {
+            replacement.origin = s.origin;
+            replacement.tmuxName = s.tmuxName;
+            registry.changed(replacement);
+            registry.remove(s.id);
+            return send(res, 200, { ok: true, session: replacement.summaryJSON() });
+          }
+        }
         return send(res, 200, { ok: true });
       }
     }

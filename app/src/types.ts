@@ -22,6 +22,8 @@ export interface SessionSummary {
   activity: string;
   waiting: Waiting | null;
   model: string | null;
+  /** Claude's exact current effort, such as low, high, or xhigh. */
+  effort?: string | null;
   context: number | null;
   permissionMode: string | null;
   title: string | null;

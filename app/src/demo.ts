@@ -202,7 +202,7 @@ export class DemoHub extends Hub {
   override async command(id: string, command: string) {
     this.add(id, item("notice", command));
     this.notify();
-    return {};
+    return { ok: true };
   }
 
   override async models(id: string): Promise<ModelChoice[]> {

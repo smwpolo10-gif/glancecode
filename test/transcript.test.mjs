@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { entryMeta, entryToItems, toolLabel, TranscriptTail } from "../hub/transcript.mjs";
-import { readDialog } from "../hub/tmux.mjs";
+import { entryMeta, entryToItems, isLocalCommandOutput, toolLabel, TranscriptTail } from "../hub/transcript.mjs";
+import { readClaudeModel, readDialog, readEffort } from "../hub/tmux.mjs";
 import { Registry } from "../hub/sessions.mjs";
 
 test("registry ignores hooks outside its allowed roots", () => {
@@ -46,6 +46,8 @@ test("slash commands and their output become notices", () => {
   assert.deepEqual([cmd.kind, cmd.text], ["notice", "/model opus"]);
   const [out] = entryToItems({ type: "user", uuid: "c2", message: { content: "<local-command-stdout>Set model to Opus</local-command-stdout>" } });
   assert.equal(out.text, "Set model to Opus");
+  assert.equal(isLocalCommandOutput({ type: "user", message: { content: "<local-command-stdout>Set model to Opus</local-command-stdout>" } }), true);
+  assert.equal(isLocalCommandOutput({ type: "user", message: { content: "ordinary prompt" } }), false);
 });
 
 test("assistant text, tool calls, and failed tool results", () => {
@@ -78,10 +80,10 @@ test("queued prompts typed while busy show as user items", () => {
   assert.deepEqual([q.kind, q.text], ["user", "also run lint"]);
 });
 
-test("meta: title, model and context size", () => {
+test("meta: title, model, effort and context size", () => {
   assert.deepEqual(entryMeta({ type: "ai-title", aiTitle: "Grocery fixes" }), { title: "Grocery fixes" });
-  const m = entryMeta({ type: "assistant", message: { model: "claude-opus-5", usage: { input_tokens: 2, cache_read_input_tokens: 1000 } } });
-  assert.deepEqual(m, { model: "claude-opus-5", context: 1002 });
+  const m = entryMeta({ type: "assistant", effort: "xhigh", message: { model: "claude-opus-5", usage: { input_tokens: 2, cache_read_input_tokens: 1000 } } });
+  assert.deepEqual(m, { model: "claude-opus-5", context: 1002, effort: "xhigh" });
 });
 
 test("tool labels", () => {
@@ -142,6 +144,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel`;
 ────────────────
   ⏸ manual mode on · ? for shortcuts`;
   assert.equal(readDialog(idle).kind, "input");
+});
+
+test("readEffort reads Claude Code's exact status-line value", () => {
+  assert.equal(readEffort("  ◉ xhigh · /effort"), "xhigh");
+  assert.equal(readEffort("Opus 5 (1M context) with xhigh effort · Claude Max"), "xhigh");
+  assert.equal(readClaudeModel("Opus 5 (1M context) with xhigh effort · Claude Max"), "Opus 5");
+  assert.equal(readEffort("Opus 5 · idle"), null);
 });
 
 test("transcript cleanup drops sound-effect captions and silence hallucinations", async () => {

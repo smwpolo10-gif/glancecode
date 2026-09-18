@@ -7,6 +7,7 @@ import type { Hub } from "./hub.ts";
 import type { Action } from "./input.ts";
 import { padTo, spread, truncate, width, wrap } from "./text.ts";
 import type { Agent, ModelChoice, RecentProject, SessionSummary } from "./types.ts";
+import { spokenSlashCommand } from "./voice-command.ts";
 
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
@@ -469,6 +470,12 @@ class HomeScreen implements Screen {
 
   voiceTarget() {
     const r = this.rows()[this.selected];
+    if (r?.kind === "resume") {
+      return async (text: string) => {
+        if (spokenSlashCommand(text) === "/resume") this.app.push(new ResumePicker(this.app));
+        else this.app.toast("Say 'slash resume', or tap Resume");
+      };
+    }
     if (r?.kind !== "session" || !r.s.controllable || r.s.waiting?.kind === "permission") return null;
     const { id, project } = r.s;
     return async (text: string) => {
@@ -609,7 +616,8 @@ class SessionScreen implements Screen {
     const rightParts = [];
     if (this.scroll) rightParts.push(`↑${this.scroll}`);
     if (!following && s.waiting) rightParts.push("◆ tap");
-    rightParts.push(s.controllable ? shortModel(s.model) : "view only");
+    const model = shortModel(s.model);
+    rightParts.push(s.controllable ? `${model}${s.effort ? ` · ${s.effort}` : ""}` : "view only");
     return { header: spread(left, rightParts.filter(Boolean).join("  "), HEADER_INNER_W), body, menu };
   }
 
@@ -673,8 +681,19 @@ class SessionScreen implements Screen {
     if (s.waiting?.kind === "permission") return null; // approve or deny first; a typed Enter would pick an option
     return async (text: string) => {
       const current = this.session;
-      if (current?.waiting?.kind === "question") await this.app.hub.answer(this.id, text);
-      else await this.app.hub.prompt(this.id, text);
+      const command = spokenSlashCommand(text);
+      if (current?.waiting?.kind === "question") {
+        await this.app.hub.answer(this.id, text);
+      } else if (command === "/resume") {
+        this.app.push(new ResumePicker(this.app));
+      } else if (command === "/clear") {
+        this.app.push(new ClearConversationScreen(this.app, this.id, current?.project || "this session"));
+      } else if (command) {
+        await this.app.hub.command(this.id, command);
+        this.app.toast(`Sent ${command}`);
+      } else {
+        await this.app.hub.prompt(this.id, text);
+      }
       this.scroll = 0;
     };
   }
@@ -697,10 +716,18 @@ class ClearConversationScreen implements Screen {
     if (a.type === "doubleTap") {
       this.app.pop();
     } else if (a.type === "tap") {
-      await this.app.hub.command(this.id, "/clear");
+      const { session } = await this.app.hub.command(this.id, "/clear");
       this.app.pop();
-      this.app.pop();
-      this.app.toast("Conversation cleared");
+      if (session) {
+        this.app.hub.sessions.delete(this.id);
+        this.app.hub.items.delete(this.id);
+        this.app.hub.sessions.set(session.id, session);
+        this.app.replace(new SessionScreen(this.app, session.id));
+        this.app.toast("Fresh conversation ready");
+      } else {
+        this.app.pop();
+        this.app.toast("Conversation cleared");
+      }
     }
   }
 }

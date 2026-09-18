@@ -170,19 +170,31 @@ export function entryToItems(entry) {
   return out;
 }
 
-/** Metadata worth keeping per session: title, model, summaries. */
+/** Metadata worth keeping per session: title, model, effort, summaries. */
 export function entryMeta(entry) {
   if (!entry) return null;
   if (entry.type === "ai-title" && entry.aiTitle) return { title: entry.aiTitle };
   if (entry.type === "custom-title" && entry.customTitle) return { title: entry.customTitle };
-  if (entry.type === "assistant" && entry.message?.model && entry.message.model !== "<synthetic>") {
-    const u = entry.message.usage || {};
+  if (entry.type === "assistant") {
+    const meta = {};
+    if (entry.message?.model && entry.message.model !== "<synthetic>") {
+      meta.model = entry.message.model;
+    }
+    const u = entry.message?.usage || {};
     const context = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-    return { model: entry.message.model, context: context || undefined };
+    if (context) meta.context = context;
+    const effort = entry.perTurnEffort || entry.effort;
+    if (typeof effort === "string" && effort) meta.effort = effort;
+    if (Object.keys(meta).length) return meta;
   }
   if (entry.type === "system" && entry.subtype === "away_summary" && entry.content) return { summary: String(entry.content) };
   if (entry.type === "user" && typeof entry.permissionMode === "string") return { permissionMode: entry.permissionMode };
   return null;
+}
+
+/** Claude writes this record when a local slash command has finished printing. */
+export function isLocalCommandOutput(entry) {
+  return entry?.type === "user" && typeof entry.message?.content === "string" && entry.message.content.startsWith("<local-command-stdout>");
 }
 
 /** Read the last `maxBytes` of a file and return complete lines. */
