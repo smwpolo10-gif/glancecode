@@ -7,6 +7,8 @@ test("spoken slash commands normalize explicit dictation", () => {
   assert.equal(spokenSlashCommand("Forward slash resume"), "/resume");
   assert.equal(spokenSlashCommand("/ model Opus"), "/model opus");
   assert.equal(spokenSlashCommand("slash context?"), "/context");
+  assert.equal(spokenSlashCommand("slash effort high"), "/effort high");
+  assert.equal(spokenSlashCommand("slash effort"), "/effort");
 });
 
 test("ordinary prompts and unsupported commands remain prompts", () => {

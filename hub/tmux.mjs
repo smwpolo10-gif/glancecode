@@ -233,6 +233,33 @@ export async function switchModel(target, model, settingsPath) {
   return { restoredDefault: after !== before ? before ?? null : null };
 }
 
+/** Change this session's effort while restoring the user's default afterward. */
+export async function switchEffort(target, effort, settingsPath) {
+  const { readFileSync, writeFileSync } = await import("node:fs");
+  const readDefault = () => {
+    try {
+      return JSON.parse(readFileSync(settingsPath, "utf8")).effortLevel;
+    } catch {
+      return undefined;
+    }
+  };
+  const before = readDefault();
+  await sendPrompt(target, `/effort ${effort}`);
+  const until = Date.now() + 4000;
+  while (Date.now() < until) {
+    await sleep(250);
+    if (/Set effort level to/i.test((await capture(target, 20)).split("\n").slice(-12).join("\n"))) break;
+  }
+  const after = readDefault();
+  if (after !== before) {
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    if (before === undefined) delete settings.effortLevel;
+    else settings.effortLevel = before;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  }
+  return { restoredDefault: after !== before ? before ?? null : null };
+}
+
 /** Answer a question with free text via its "Type something" option. */
 export async function answerWithText(target, text, agent = "claude") {
   const dialog = readDialog(await capture(target), agent);

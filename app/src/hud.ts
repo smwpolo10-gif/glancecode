@@ -1,8 +1,9 @@
-import { BODY_INNER_W, BODY_LINES, HEADER_INNER_W, type Frame, type MenuItem } from "./display.ts";
+import { BODY_INNER_W, BODY_LINES, type Frame, type MenuItem } from "./display.ts";
 import type { App, Screen } from "./app.ts";
 import type { Action } from "./input.ts";
-import type { GridCell, TerminalHudSettings } from "./settings.ts";
-import { formatCountdown, phaseLabel } from "./pomodoro.ts";
+import type { BreakLabel, GridCell, TerminalHudSettings } from "./settings.ts";
+import { formatCountdown } from "./pomodoro.ts";
+import type { PomodoroPhase } from "./pomodoro.ts";
 import { padTo, spread, truncate, width, wrap } from "./text.ts";
 
 const MENU_SESSIONS = 20;
@@ -60,6 +61,12 @@ export function sessionStamp(settings: TerminalHudSettings, now = new Date()): s
   if (settings.sessions.showTime) parts.push(formatClock(now, { ...settings.hud.clock, showSeconds: false }));
   if (settings.sessions.showDate) parts.push(formatDate(now, settings.hud.date.format));
   return parts.join(" · ");
+}
+
+export function pomodoroText(remainingMs: number, phase: PomodoroPhase, breakLabel: BreakLabel): string {
+  const countdown = formatCountdown(remainingMs);
+  if (phase === "focus" || breakLabel === "off") return countdown;
+  return breakLabel === "b" ? `B ${countdown}` : `Break ${countdown}`;
 }
 
 type HudWidget = { text: string; position: GridCell };
@@ -231,7 +238,10 @@ export class PomodoroScreen implements Screen {
   frame(): Frame {
     const snapshot = this.app.pomodoro.snapshot();
     const settings = this.app.settings.current;
-    const timerWidget: HudWidget = { text: formatCountdown(snapshot.remainingMs), position: settings.pomodoro.position };
+    const timerWidget: HudWidget = {
+      text: pomodoroText(snapshot.remainingMs, snapshot.phase, settings.pomodoro.breakLabel),
+      position: settings.pomodoro.position,
+    };
     const widgets: HudWidget[] = [timerWidget];
     const mode = completionMode(settings, "pomodoro");
     const banner = mode === "banner" ? this.app.completions.banner(Date.now(), completionBannerSeconds(settings)) : null;
@@ -249,8 +259,7 @@ export class PomodoroScreen implements Screen {
       { id: MENU_SESSIONS, name: "Sessions" },
       { id: MENU_HUD, name: "Ambient HUD" },
     ];
-    const state = snapshot.running ? "running" : "paused";
-    return { header: spread(phaseLabel(snapshot.phase), state, HEADER_INNER_W), body: layoutWidgets(widgets), menu };
+    return { header: "", body: layoutWidgets(widgets), menu };
   }
 
   action(a: Action) {

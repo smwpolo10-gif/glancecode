@@ -436,7 +436,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
           log(`→ ${s.project} (gemini): ${geminiCommand}`);
           return send(res, 200, { ok: true });
         }
-        const allowed = /^\/(model (opus|sonnet|haiku|fable)(\[1m\])?|compact|clear|cost|context)$/;
+        const allowed = /^\/(model (opus|sonnet|haiku|fable)(\[1m\])?|effort (low|medium|high|xhigh|max)|compact|clear|cost|context)$/;
         if (!allowed.test(String(command))) throw new HttpError(400, "command not allowed");
         await refuseIfDialog(s);
         const model = /^\/model (\S+)$/.exec(command)?.[1];
@@ -444,6 +444,12 @@ export function startHub({ quiet = false, feed = true } = {}) {
           const withWindow = !model.startsWith("haiku") && (/\[1m\]$/.test(model) || (s.context || 0) > 150_000) ? model.replace(/(\[1m\])?$/, "[1m]") : model;
           await tmuxCtl.switchModel(controllable(s), withWindow, join(homedir(), ".claude", "settings.json"));
           log(`→ ${s.project}: /model ${withWindow} (default left unchanged)`);
+          return send(res, 200, { ok: true });
+        }
+        const effort = /^\/effort (low|medium|high|xhigh|max)$/.exec(command)?.[1];
+        if (effort) {
+          await tmuxCtl.switchEffort(controllable(s), effort, join(homedir(), ".claude", "settings.json"));
+          log(`→ ${s.project}: /effort ${effort} (default left unchanged)`);
           return send(res, 200, { ok: true });
         }
         const target = controllable(s);

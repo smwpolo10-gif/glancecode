@@ -230,8 +230,8 @@ export class App {
     }
     frame = this.overlayVoice(frame);
     frame = { ...frame, brightness: this.settings.current.hud.brightness };
-    if (this.toastText) frame = { ...frame, header: truncate(this.toastText, HEADER_INNER_W) };
-    else if (!this.hub.connected) frame = { ...frame, header: spread(truncate(frame.header, HEADER_INNER_W - 90), "reconnecting", HEADER_INNER_W) };
+    frame = this.overlayToast(frame);
+    if (!this.toastText && !this.hub.connected) frame = { ...frame, header: spread(truncate(frame.header, HEADER_INNER_W - 90), "reconnecting", HEADER_INNER_W) };
     this.display.show(frame);
   }
 
@@ -250,6 +250,13 @@ export class App {
     }
     const keep = Math.max(0, BODY_LINES - tail.length);
     return { ...frame, body: [...frame.body.slice(-keep), ...tail].slice(-BODY_LINES) };
+  }
+
+  private overlayToast(frame: Frame): Frame {
+    if (!this.toastText) return frame;
+    const lines = wrap(this.toastText, BODY_INNER_W, "◇ ", "   ").slice(-2);
+    const keep = Math.max(0, BODY_LINES - lines.length);
+    return { ...frame, body: [...frame.body.slice(-keep), ...lines].slice(-BODY_LINES) };
   }
 
   // ---------- input ----------
@@ -520,6 +527,7 @@ class HomeScreen implements Screen {
     });
     const selLine = lineRows.indexOf(this.selected);
     const { rows: visible } = windowAround(lines, selLine, BODY_LINES);
+    const selectedRow = rows[this.selected];
     return {
       header: spread(
         this.app.hub.cfg.url === "demo" ? "Sessions · demo" : "Sessions",
@@ -527,7 +535,10 @@ class HomeScreen implements Screen {
         HEADER_INNER_W,
       ),
       body: visible,
-      menu: [{ id: 7, name: `Refresh · v${APP_VERSION}` }],
+      menu: [
+        ...(selectedRow?.kind === "session" && selectedRow.s.controllable ? [{ id: 9, name: "End selected session" }] : []),
+        { id: 7, name: `Refresh · v${APP_VERSION}` },
+      ],
     };
   }
 
@@ -538,6 +549,10 @@ class HomeScreen implements Screen {
     else if (a.type === "down") this.move(1, rows);
     else if (a.type === "doubleTap") this.app.pop();
     else if (a.type === "menu" && a.id === 7) this.app.hub.refresh();
+    else if (a.type === "menu" && a.id === 9) {
+      const r = rows[this.selected];
+      if (r?.kind === "session" && r.s.controllable) this.app.push(new EndSessionScreen(this.app, r.s.id, r.s.project, true));
+    }
     else if (a.type === "tap") {
       const r = rows[this.selected];
       if (r?.kind === "session") this.app.openSession(r.s.id);
@@ -566,16 +581,14 @@ class HomeScreen implements Screen {
 
 // ---------- session transcript ----------
 
-// Model entries take menu ids from 100 up; the glasses menu holds ten items.
-const MODEL_MENU_BASE = 100;
-const MAX_MODEL_ITEMS = 4;
-
 function sessionMenu(models: ModelChoice[], agent: Agent, controllable = false): MenuItem[] {
   return [
     { id: 1, name: "Interrupt" },
     { id: 2, name: "Jump to latest" },
-    ...models.slice(0, MAX_MODEL_ITEMS).map((m, i) => ({ id: MODEL_MENU_BASE + i, name: `Use ${m.name}` })),
+    ...(models.length ? [{ id: 3, name: "Change model" }] : []),
+    ...(agent === "claude" ? [{ id: 4, name: "Change effort" }] : []),
     { id: 6, name: "Compact" },
+    ...(agent === "claude" ? [{ id: 5, name: "Resume" }] : []),
     ...(agent === "codex" ? [] : [{ id: 8, name: "Clear conversation" }]),
     ...(controllable ? [{ id: 9, name: "End session" }] : []),
     { id: 7, name: "Refresh" },
@@ -751,13 +764,13 @@ class SessionScreen implements Screen {
           this.app.push(new ClearConversationScreen(this.app, this.id, s?.project || "this session"));
         } else if (a.id === 9 && s?.controllable) {
           this.app.push(new EndSessionScreen(this.app, this.id, s.project));
-        } else if (a.id >= MODEL_MENU_BASE) {
-          const model = this.models[a.id - MODEL_MENU_BASE];
-          if (model) {
-            await this.app.hub.command(this.id, `/model ${model.id}`);
-            // Codex picks the model up with the next prompt; Claude Code switches now.
-            this.app.toast(agentOf(s) === "codex" ? `${model.name} from your next message` : `Switched to ${model.name}`);
-          }
+        } else if (a.id === 3 && this.models.length) {
+          this.app.push(new ModelPicker(this.app, this.id, this.models, agentOf(s)));
+        } else if (a.id === 4 && agentOf(s) === "claude") {
+          this.app.push(new EffortPicker(this.app, this.id, s?.effort || ""));
+        } else if (a.id === 5 && agentOf(s) === "claude") {
+          await this.app.hub.prompt(this.id, "/resume");
+          this.app.toast("Sent /resume");
         }
         return;
     }
@@ -775,6 +788,8 @@ class SessionScreen implements Screen {
       } else if (command === "/resume") {
         await this.app.hub.prompt(this.id, command);
         this.app.toast("Sent /resume");
+      } else if (command === "/effort") {
+        this.app.push(new EffortPicker(this.app, this.id, current?.effort || ""));
       } else if (command === "/clear") {
         this.app.push(new ClearConversationScreen(this.app, this.id, current?.project || "this session"));
       } else if (command) {
@@ -789,7 +804,7 @@ class SessionScreen implements Screen {
 }
 
 class EndSessionScreen implements Screen {
-  constructor(private app: App, private id: string, private project: string) {}
+  constructor(private app: App, private id: string, private project: string, private fromList = false) {}
 
   frame(): Frame {
     return {
@@ -808,7 +823,7 @@ class EndSessionScreen implements Screen {
       await this.app.hub.end(this.id);
       this.app.completions.acknowledge(this.id);
       this.app.pop();
-      this.app.pop();
+      if (!this.fromList) this.app.pop();
       this.app.toast(`${this.project} ended`);
     }
   }
@@ -895,15 +910,32 @@ abstract class Picker implements Screen {
 
 async function startSession(app: App, p: RecentProject, agent: Agent) {
   app.toast(`Starting ${AGENT_NAME[agent]} in ${p.project}…`, 15000);
-  const { session, terminalOpened } = await app.hub.launch(p.cwd, undefined, agent, app.settings.current.openTerminalOnLaunch);
+  const requestedTerminal = app.settings.current.openTerminalOnLaunch;
+  const { session, terminalOpened, terminalApp } = await app.hub.launch(p.cwd, undefined, agent, requestedTerminal);
   app.hub.sessions.set(session.id, session);
-  app.toast(`Started ${p.project}${terminalOpened ? " on glasses + Mac" : ""}. Hold to talk.`);
+  const where = terminalOpened ? ` + ${terminalApp === "orca" ? "Orca" : "Mac Terminal"}` : requestedTerminal ? " (headless; Mac window did not open)" : "";
+  app.toast(`Started ${p.project}${where}. Hold to talk.`, 4500);
   app.replace(new SessionScreen(app, session.id));
 }
 
 class ProjectPicker extends Picker {
   constructor(app: App) {
     super(app, "New session in…");
+  }
+
+  enter() {
+    this.load()
+      .then(async (options) => {
+        this.options = options;
+        this.app.render();
+        // With one allowed project, tapping New session is already an explicit
+        // choice. Start it directly instead of requiring a second tap on Pillbee.
+        if (options.length === 1) await options[0].run();
+      })
+      .catch((err) => {
+        this.error = err.message;
+        this.app.render();
+      });
   }
 
   async load() {
@@ -929,6 +961,43 @@ class AgentPicker extends Picker {
     return this.agents.map((agent) => ({
       label: AGENT_PRODUCT[agent] || agent,
       run: () => startSession(this.app, this.project, agent),
+    }));
+  }
+}
+
+class ModelPicker extends Picker {
+  constructor(app: App, private id: string, private models: ModelChoice[], private agent: Agent) {
+    super(app, "Model");
+  }
+
+  async load() {
+    return this.models.map((model) => ({
+      label: model.name,
+      run: async () => {
+        await this.app.hub.command(this.id, `/model ${model.id}`);
+        this.app.pop();
+        this.app.toast(this.agent === "codex" ? `${model.name} from your next message` : `Switched to ${model.name}`);
+      },
+    }));
+  }
+}
+
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+class EffortPicker extends Picker {
+  constructor(app: App, private id: string, private current: string) {
+    super(app, "Effort");
+  }
+
+  async load() {
+    return EFFORT_LEVELS.map((effort) => ({
+      label: effort,
+      right: effort === this.current ? "current" : "",
+      run: async () => {
+        await this.app.hub.command(this.id, `/effort ${effort}`);
+        this.app.pop();
+        this.app.toast(`Effort: ${effort}`);
+      },
     }));
   }
 }

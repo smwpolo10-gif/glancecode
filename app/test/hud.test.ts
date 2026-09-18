@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS } from "../src/settings.ts";
-import { formatClock, formatDate, layoutWidgets, sessionStamp } from "../src/hud.ts";
+import { formatClock, formatDate, layoutWidgets, pomodoroText, sessionStamp } from "../src/hud.ts";
 
 test("clock defaults to 12-hour time without seconds", () => {
   const at = new Date(2026, 8, 18, 13, 5, 42);
@@ -30,4 +30,11 @@ test("native HUD layout places widgets in the requested grid rows", () => {
   assert.match(body[0], /^1:05 PM.*Sep 18$/);
   assert.ok(body[Math.floor(body.length / 2)].trim().endsWith("25:00"));
   assert.ok(body.at(-1)?.trim().endsWith("◆2"));
+});
+
+test("Pomodoro hides state text and only labels breaks when requested", () => {
+  assert.equal(pomodoroText(5 * 60_000, "focus", "break"), "05:00");
+  assert.equal(pomodoroText(5 * 60_000, "shortBreak", "off"), "05:00");
+  assert.equal(pomodoroText(5 * 60_000, "shortBreak", "b"), "B 05:00");
+  assert.equal(pomodoroText(5 * 60_000, "longBreak", "break"), "Break 05:00");
 });

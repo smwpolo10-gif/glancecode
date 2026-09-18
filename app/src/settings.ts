@@ -18,6 +18,7 @@ export type DateFormat = "weekday-month-day" | "month-day" | "numeric";
 export type CompletionMode = "off" | "bell" | "banner";
 export type BellPlacement = "before" | "after" | "opposite-corner";
 export type BannerDurationSeconds = 0 | 5 | 10 | 30 | 60;
+export type BreakLabel = "off" | "b" | "break";
 
 export interface WidgetPlacement {
   position: GridCell;
@@ -52,6 +53,7 @@ export interface TerminalHudSettings {
     shortBreakMinutes: number;
     longBreakMinutes: number;
     roundsBeforeLongBreak: number;
+    breakLabel: BreakLabel;
   };
   sessions: {
     showTime: boolean;
@@ -101,6 +103,7 @@ export const DEFAULT_SETTINGS: TerminalHudSettings = {
     shortBreakMinutes: 5,
     longBreakMinutes: 15,
     roundsBeforeLongBreak: 4,
+    breakLabel: "off",
     position: "bottom-center",
     size: "medium",
   },
@@ -122,6 +125,7 @@ const DATE_FORMATS = new Set<DateFormat>(["weekday-month-day", "month-day", "num
 const COMPLETION_MODES = new Set<CompletionMode>(["off", "bell", "banner"]);
 const BELL_PLACEMENTS = new Set<BellPlacement>(["before", "after", "opposite-corner"]);
 const BANNER_DURATIONS = new Set<BannerDurationSeconds>([0, 5, 10, 30, 60]);
+const BREAK_LABELS = new Set<BreakLabel>(["off", "b", "break"]);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -198,6 +202,7 @@ export function normalizeSettings(value: unknown): TerminalHudSettings {
       shortBreakMinutes: int(pomodoro.shortBreakMinutes, d.pomodoro.shortBreakMinutes, 1, 60),
       longBreakMinutes: int(pomodoro.longBreakMinutes, d.pomodoro.longBreakMinutes, 1, 120),
       roundsBeforeLongBreak: int(pomodoro.roundsBeforeLongBreak, d.pomodoro.roundsBeforeLongBreak, 1, 12),
+      breakLabel: oneOf(pomodoro.breakLabel, BREAK_LABELS, d.pomodoro.breakLabel),
     },
     sessions: {
       showTime: bool(sessions.showTime, d.sessions.showTime),

@@ -95,6 +95,7 @@ function readForm(): TerminalHudSettings {
       shortBreakMinutes: numberValue("pomodoro-short-break"),
       longBreakMinutes: numberValue("pomodoro-long-break"),
       roundsBeforeLongBreak: numberValue("pomodoro-rounds"),
+      breakLabel: value("pomodoro-break-label"),
       position: value("pomodoro-position"),
       size: value("pomodoro-size"),
     },
@@ -131,6 +132,7 @@ function assignForm(settings: TerminalHudSettings) {
   byId<HTMLInputElement>("pomodoro-short-break").value = String(settings.pomodoro.shortBreakMinutes);
   byId<HTMLInputElement>("pomodoro-long-break").value = String(settings.pomodoro.longBreakMinutes);
   byId<HTMLInputElement>("pomodoro-rounds").value = String(settings.pomodoro.roundsBeforeLongBreak);
+  byId<HTMLSelectElement>("pomodoro-break-label").value = settings.pomodoro.breakLabel;
   byId<HTMLSelectElement>("pomodoro-size").value = settings.pomodoro.size;
   setPosition("pomodoro-position", settings.pomodoro.position);
   byId<HTMLInputElement>("sessions-time").checked = settings.sessions.showTime;

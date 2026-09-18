@@ -8,7 +8,9 @@ export function spokenSlashCommand(text: string): string | null {
   value = value.replace(/^\/\s+/, "/").replace(/\s+/g, " ").toLowerCase();
   if (!value.startsWith("/")) return null;
 
-  if (["/clear", "/compact", "/context", "/cost", "/resume"].includes(value)) return value;
+  if (["/clear", "/compact", "/context", "/cost", "/resume", "/effort"].includes(value)) return value;
   const model = /^\/model (opus|sonnet|haiku|fable)$/.exec(value);
-  return model ? `/model ${model[1]}` : null;
+  if (model) return `/model ${model[1]}`;
+  const effort = /^\/effort (low|medium|high|xhigh|max)$/.exec(value);
+  return effort ? `/effort ${effort[1]}` : null;
 }

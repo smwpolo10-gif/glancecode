@@ -27,6 +27,7 @@ test("defaults match the personal Terminal HUD setup", () => {
   assert.equal(settings.completion.clockMode, "banner");
   assert.equal(settings.completion.pomodoroMode, "bell");
   assert.equal(settings.completion.bannerDurationSeconds, 0);
+  assert.equal(settings.pomodoro.breakLabel, "off");
   assert.equal(settings.openTerminalOnLaunch, true);
 });
 
@@ -39,7 +40,7 @@ test("normalization preserves valid settings and clamps unsafe numbers", () => {
       date: { format: "numeric" },
     },
     completion: { clockMode: "bell", pomodoroMode: "off", bellPlacement: "opposite-corner", bannerDurationSeconds: 5 },
-    pomodoro: { workMinutes: 500, shortBreakMinutes: 0, longBreakMinutes: 31.7, roundsBeforeLongBreak: 30 },
+    pomodoro: { workMinutes: 500, shortBreakMinutes: 0, longBreakMinutes: 31.7, roundsBeforeLongBreak: 30, breakLabel: "b" },
     sessions: { showHistory: false },
     openTerminalOnLaunch: false,
   });
@@ -62,6 +63,7 @@ test("normalization preserves valid settings and clamps unsafe numbers", () => {
   assert.equal(settings.pomodoro.shortBreakMinutes, 1);
   assert.equal(settings.pomodoro.longBreakMinutes, 32);
   assert.equal(settings.pomodoro.roundsBeforeLongBreak, 12);
+  assert.equal(settings.pomodoro.breakLabel, "b");
   assert.equal(settings.sessions.showHistory, false);
   assert.equal(settings.openTerminalOnLaunch, false);
 });
