@@ -5,7 +5,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { entryMeta, entryToItems, isLocalCommandOutput, toolLabel, TranscriptTail } from "../hub/transcript.mjs";
 import { readClaudeModel, readDialog, readEffort } from "../hub/tmux.mjs";
-import { Registry } from "../hub/sessions.mjs";
+import { carryConversationPreferences, Registry, Session } from "../hub/sessions.mjs";
+
+test("clear replacements and saved sessions retain model and effort", () => {
+  const previous = new Session({ id: "old", cwd: "/tmp/project", transcriptPath: "/tmp/old.jsonl" });
+  previous.model = "Opus 5";
+  previous.effort = "xhigh";
+  const replacement = new Session({ id: "new", cwd: "/tmp/project", transcriptPath: "/tmp/new.jsonl" });
+
+  carryConversationPreferences(replacement, previous);
+
+  assert.equal(replacement.model, "Opus 5");
+  assert.equal(replacement.effort, "xhigh");
+  assert.equal(replacement.persistJSON().model, "Opus 5");
+  assert.equal(replacement.persistJSON().effort, "xhigh");
+});
 
 test("registry ignores hooks outside its allowed roots", () => {
   const dir = mkdtempSync(join(tmpdir(), "glancecode-roots-"));

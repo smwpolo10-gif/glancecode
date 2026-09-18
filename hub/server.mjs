@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { CODEX_SOCKET, loadConfig, tailscaleAddress } from "./config.mjs";
 import { CodexBridge, findCodex } from "./codex.mjs";
 import { recentGeminiSessions } from "./gemini.mjs";
-import { Registry, recentProjects, recentTranscripts } from "./sessions.mjs";
+import { carryConversationPreferences, Registry, recentProjects, recentTranscripts } from "./sessions.mjs";
 import { Transcriber } from "./stt.mjs";
 import { Notifier } from "./notify.mjs";
 import * as tmuxCtl from "./tmux.mjs";
@@ -449,6 +449,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
           const { activeModel } = await tmuxCtl.switchModel(controllable(s), withWindow, join(homedir(), ".claude", "settings.json"));
           s.model = activeModel || CLAUDE_MODELS.find((choice) => choice.id === bareModel)?.name || bareModel;
           registry.changed(s);
+          registry.scheduleSave();
           log(`→ ${s.project}: /model ${withWindow} (default left unchanged)`);
           return send(res, 200, { ok: true });
         }
@@ -457,6 +458,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
           const { activeEffort } = await tmuxCtl.switchEffort(controllable(s), effort, join(homedir(), ".claude", "settings.json"));
           s.effort = activeEffort || effort;
           registry.changed(s);
+          registry.scheduleSave();
           log(`→ ${s.project}: /effort ${effort} (default left unchanged)`);
           return send(res, 200, { ok: true });
         }
@@ -466,6 +468,7 @@ export function startHub({ quiet = false, feed = true } = {}) {
         if (command === "/clear") {
           const replacement = await waitForSessionOnPane(target, 12_000, s.id);
           if (replacement) {
+            carryConversationPreferences(replacement, s);
             replacement.origin = s.origin;
             replacement.tmuxName = s.tmuxName;
             registry.changed(replacement);

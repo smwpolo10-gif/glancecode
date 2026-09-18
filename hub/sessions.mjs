@@ -120,9 +120,18 @@ export class Session {
       origin: this.origin,
       tmuxName: this.tmuxName,
       state: this.state,
+      model: this.model,
+      effort: this.effort,
       lastActivity: this.lastActivity,
     };
   }
+}
+
+/** A /clear replacement keeps the active per-terminal model and effort. */
+export function carryConversationPreferences(next, previous) {
+  if (!next.model && previous.model) next.model = previous.model;
+  if (!next.effort && previous.effort) next.effort = previous.effort;
+  return next;
 }
 
 export class Registry extends EventEmitter {
@@ -153,7 +162,15 @@ export class Registry extends EventEmitter {
       if (!this.allows(s.cwd)) continue;
       if (!pidAlive(s.pid)) continue; // only restore sessions whose process still runs
       const session = new Session(s);
-      Object.assign(session, { agent: s.agent === "gemini" ? "gemini" : "claude", tmux: s.tmux, pid: s.pid, origin: s.origin || "terminal", tmuxName: s.tmuxName || null });
+      Object.assign(session, {
+        agent: s.agent === "gemini" ? "gemini" : "claude",
+        tmux: s.tmux,
+        pid: s.pid,
+        origin: s.origin || "terminal",
+        tmuxName: s.tmuxName || null,
+        model: typeof s.model === "string" ? s.model : null,
+        effort: typeof s.effort === "string" ? s.effort : null,
+      });
       session.state = "idle"; // waiting details are not persisted; the next hook or sweep corrects it
       session.lastActivity = s.lastActivity || Date.now();
       this.attach(session);
