@@ -44,6 +44,13 @@ function pidAlive(pid) {
   }
 }
 
+/** Recover the last trustworthy live state after a hub restart. */
+export function restoredLiveState(saved = {}) {
+  if (saved.state === "waiting" && saved.waiting) return "waiting";
+  if (saved.state === "working" || saved.state === "starting" || saved.state === "waiting") return "working";
+  return "idle";
+}
+
 /**
  * @typedef {"starting"|"working"|"idle"|"waiting"|"ended"} State
  */
@@ -121,6 +128,10 @@ export class Session {
       origin: this.origin,
       tmuxName: this.tmuxName,
       state: this.state,
+      activity: this.activity,
+      waiting: this.waiting,
+      backgroundTasks: this.backgroundTasks,
+      stoppedAt: this.stoppedAt || null,
       model: this.model,
       effort: this.effort,
       lastActivity: this.lastActivity,
@@ -171,8 +182,12 @@ export class Registry extends EventEmitter {
         tmuxName: s.tmuxName || null,
         model: typeof s.model === "string" ? s.model : null,
         effort: typeof s.effort === "string" ? s.effort : null,
+        activity: typeof s.activity === "string" ? s.activity : "",
+        waiting: s.waiting && typeof s.waiting === "object" ? s.waiting : null,
+        backgroundTasks: Number.isFinite(s.backgroundTasks) ? Math.max(0, s.backgroundTasks) : 0,
+        stoppedAt: Number.isFinite(s.stoppedAt) ? s.stoppedAt : 0,
       });
-      session.state = "idle"; // waiting details are not persisted; the next hook or sweep corrects it
+      session.state = restoredLiveState(s);
       session.lastActivity = s.lastActivity || Date.now();
       this.attach(session);
     }
@@ -379,11 +394,16 @@ export class Registry extends EventEmitter {
         break;
       case "Stop":
         session.stoppedAt = Date.now();
-        session.state = "idle";
         session.waiting = null;
-        session.activity = "";
         session.backgroundTasks = Array.isArray(payload.background_tasks) ? payload.background_tasks.length : 0;
-        this.emit("finished", session, payload.last_assistant_message || "");
+        if (session.backgroundTasks > 0) {
+          session.state = "working";
+          session.activity = `${session.backgroundTasks} background task${session.backgroundTasks === 1 ? "" : "s"}`;
+        } else {
+          session.state = "idle";
+          session.activity = "";
+          this.emit("finished", session, payload.last_assistant_message || "");
+        }
         break;
       case "StopFailure":
         session.stoppedAt = Date.now();

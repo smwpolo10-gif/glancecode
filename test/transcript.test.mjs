@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { entryMeta, entryToItems, isLocalCommandOutput, toolLabel, TranscriptTail } from "../hub/transcript.mjs";
 import { readClaudeModel, readDialog, readEffort } from "../hub/tmux.mjs";
-import { carryConversationPreferences, Registry, Session } from "../hub/sessions.mjs";
+import { carryConversationPreferences, Registry, restoredLiveState, Session } from "../hub/sessions.mjs";
 
 test("clear replacements and saved sessions retain model and effort", () => {
   const previous = new Session({ id: "old", cwd: "/tmp/project", transcriptPath: "/tmp/old.jsonl" });
@@ -19,6 +19,49 @@ test("clear replacements and saved sessions retain model and effort", () => {
   assert.equal(replacement.effort, "xhigh");
   assert.equal(replacement.persistJSON().model, "Opus 5");
   assert.equal(replacement.persistJSON().effort, "xhigh");
+});
+
+test("working and waiting state survives a hub restart", () => {
+  assert.equal(restoredLiveState({ state: "working" }), "working");
+  assert.equal(restoredLiveState({ state: "starting" }), "working");
+  assert.equal(restoredLiveState({ state: "waiting", waiting: { kind: "permission" } }), "waiting");
+  assert.equal(restoredLiveState({ state: "waiting" }), "working");
+  assert.equal(restoredLiveState({ state: "idle" }), "idle");
+
+  const session = new Session({ id: "live", cwd: "/tmp/project", transcriptPath: "/tmp/live.jsonl" });
+  session.state = "working";
+  session.activity = "Bash Wait for the verdict file";
+  session.backgroundTasks = 1;
+  const saved = session.persistJSON();
+  assert.equal(saved.state, "working");
+  assert.equal(saved.activity, "Bash Wait for the verdict file");
+  assert.equal(saved.backgroundTasks, 1);
+});
+
+test("a Stop hook stays working while Claude reports background tasks", () => {
+  const dir = mkdtempSync(join(tmpdir(), "glancecode-background-"));
+  const transcript = join(dir, "session.jsonl");
+  writeFileSync(transcript, "");
+  const registry = new Registry({ allowedRoots: [dir] });
+  let finished = 0;
+  registry.on("finished", () => finished++);
+  const base = { session_id: "background", cwd: dir, transcript_path: transcript };
+  registry.handleHook({ ...base, hook_event_name: "SessionStart" });
+  registry.handleHook({ ...base, hook_event_name: "UserPromptSubmit" });
+  registry.handleHook({ ...base, hook_event_name: "Stop", background_tasks: [{ id: "agent-1" }], last_assistant_message: "Still running" });
+
+  const session = registry.sessions.get("background");
+  assert.equal(session.state, "working");
+  assert.equal(session.activity, "1 background task");
+  assert.equal(session.backgroundTasks, 1);
+  assert.equal(finished, 0);
+
+  registry.handleHook({ ...base, hook_event_name: "Stop", background_tasks: [], last_assistant_message: "Done" });
+  assert.equal(session.state, "idle");
+  assert.equal(session.backgroundTasks, 0);
+  assert.equal(finished, 1);
+  session.tail?.close();
+  clearTimeout(registry.saveTimer);
 });
 
 test("registry ignores hooks outside its allowed roots", () => {
