@@ -527,6 +527,11 @@ export function startHub({ quiet = false, feed = true } = {}) {
     if (action === "screen") return send(res, 200, { dialog: codex.dialog(s) });
     if (action === "command") {
       const { command } = await readJSON(req);
+      if (command === "/clear") {
+        const replacement = await run(() => codex.clear(s));
+        log(`→ ${s.project} (codex): /clear → ${replacement.id.slice(0, 8)}`);
+        return send(res, 200, { ok: true, session: replacement.summaryJSON() });
+      }
       if (command === "/compact") {
         await run(() => codex.compact(s));
         log(`→ ${s.project} (codex): /compact`);

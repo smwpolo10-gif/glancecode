@@ -150,9 +150,14 @@ test("codex exposes every visible model with its supported effort choices", asyn
   assert.deepEqual(await bridge.loadModels(), [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", isDefault: true, efforts: ["low", "high", "xhigh"], defaultEffort: "high" }]);
 });
 
-test("ending a Codex session unsubscribes it and removes only the live row", async () => {
+test("ending a Codex session stays absent while Codex still reports it loaded", async () => {
   const removed = [];
-  const registry = Object.assign(new EventEmitter(), { sessions: new Map(), allows: () => true, changed() {}, remove: (id) => removed.push(id) });
+  const registry = Object.assign(new EventEmitter(), {
+    sessions: new Map(),
+    allows: () => true,
+    changed() {},
+    remove(id) { removed.push(id); return this.sessions.delete(id); },
+  });
   const bridge = new codex.CodexBridge({ registry, bin: "codex", socket: "/tmp/none.sock" });
   const s = { id: "th", agent: "codex", state: "idle", codexJoined: true, waiting: null, activity: "", lastActivity: 0 };
   registry.sessions.set("th", s);
@@ -164,6 +169,100 @@ test("ending a Codex session unsubscribes it and removes only the live row", asy
   assert.deepEqual(removed, ["th"]);
   assert.equal(s.state, "ended");
   assert.equal(s.codexJoined, false);
+
+  bridge.call = async (method) => {
+    if (method === "thread/loaded/list") return { data: ["th"] };
+    throw new Error(`ended thread was unexpectedly rejoined with ${method}`);
+  };
+  await bridge.poll();
+  assert.equal(registry.sessions.has("th"), false);
+});
+
+test("an explicit History resume unsuppresses an ended Codex thread", async () => {
+  const registry = Object.assign(new EventEmitter(), {
+    sessions: new Map(),
+    allows: () => true,
+    changed() {},
+    attach(s) { this.sessions.set(s.id, s); },
+    addItems() {},
+  });
+  const bridge = new codex.CodexBridge({ registry, bin: "codex", socket: "/tmp/none.sock" });
+  bridge.ready = true;
+  bridge.suppressedThreads.add("th");
+  bridge.joining.set("th", { attempts: 999, lastAt: Date.now() });
+  const calls = [];
+  bridge.call = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "thread/resume") return { thread: { id: "th", cwd: "/allowed/project", status: { type: "idle" }, turns: [] }, model: "gpt-5.6-sol", reasoningEffort: "high" };
+    if (method === "thread/turns/list") return { data: [] };
+    return {};
+  };
+
+  const resumed = await bridge.resumeSession({ id: "th" });
+  assert.equal(resumed.id, "th");
+  assert.equal(bridge.suppressedThreads.has("th"), false);
+  assert.deepEqual(calls.map((c) => c.method), ["thread/resume", "thread/turns/list"]);
+});
+
+test("Codex clear creates a fresh thread and carries model and effort", async () => {
+  const removed = [];
+  const registry = Object.assign(new EventEmitter(), {
+    sessions: new Map(),
+    allows: (cwd) => cwd === "/allowed/project",
+    changed() {},
+    attach(s) { this.sessions.set(s.id, s); },
+    remove(id) { removed.push(id); return this.sessions.delete(id); },
+  });
+  const bridge = new codex.CodexBridge({ registry, bin: "codex", socket: "/tmp/none.sock" });
+  bridge.ready = true;
+  const old = { id: "old", agent: "codex", cwd: "/allowed/project", project: "project", state: "idle", codexJoined: true, model: "gpt-5.6-sol", effort: "xhigh", context: 87_000, origin: "glasses", waiting: null, activity: "", lastActivity: 0 };
+  registry.sessions.set(old.id, old);
+  const calls = [];
+  bridge.call = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "thread/start") return { thread: { id: "new", cwd: "/allowed/project", status: { type: "idle" }, turns: [] }, model: "gpt-5.6-sol", reasoningEffort: "medium" };
+    return {};
+  };
+
+  const replacement = await bridge.clear(old);
+  assert.equal(replacement.id, "new");
+  assert.equal(replacement.model, "gpt-5.6-sol");
+  assert.equal(replacement.effort, "xhigh");
+  assert.equal(replacement.context, null);
+  assert.equal(replacement.origin, "glasses");
+  assert.deepEqual(calls, [
+    { method: "thread/start", params: { cwd: "/allowed/project", model: "gpt-5.6-sol" } },
+    { method: "thread/settings/update", params: { threadId: "new", effort: "xhigh" } },
+    { method: "thread/unsubscribe", params: { threadId: "old" } },
+  ]);
+  assert.deepEqual(removed, ["old"]);
+  assert.equal(bridge.suppressedThreads.has("old"), true);
+  assert.equal(registry.sessions.get("new"), replacement);
+});
+
+test("a new Codex session defaults to high effort when its model supports it", async () => {
+  const registry = Object.assign(new EventEmitter(), {
+    sessions: new Map(),
+    allows: () => true,
+    changed() {},
+    attach(s) { this.sessions.set(s.id, s); },
+  });
+  const bridge = new codex.CodexBridge({ registry, bin: "codex", socket: "/tmp/none.sock" });
+  bridge.ready = true;
+  bridge.models = [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", efforts: ["low", "medium", "high", "xhigh"] }];
+  const calls = [];
+  bridge.call = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "thread/start") return { thread: { id: "new", cwd: "/allowed/project", status: { type: "idle" }, turns: [] }, model: "gpt-5.6-sol", reasoningEffort: "medium" };
+    return {};
+  };
+
+  const started = await bridge.startSession({ cwd: "/allowed/project" });
+  assert.equal(started.effort, "high");
+  assert.deepEqual(calls, [
+    { method: "thread/start", params: { cwd: "/allowed/project" } },
+    { method: "thread/settings/update", params: { threadId: "new", effort: "high" } },
+  ]);
 });
 
 test("codex refuses threads outside the configured roots", async () => {

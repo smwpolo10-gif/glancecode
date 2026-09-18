@@ -609,7 +609,7 @@ function sessionMenu(models: ModelChoice[], agent: Agent, controllable = false):
   if (!controllable) return [{ id: 2, name: "Jump to latest" }, { id: 7, name: "Refresh" }];
   const canChangeEffort = agent === "claude" || (agent === "codex" && models.some((m) => m.efforts?.length));
   return [
-    ...(agent === "codex" ? [] : [{ id: 8, name: "Clear conversation" }]),
+    { id: 8, name: "Clear conversation" },
     ...(agent === "claude" ? [{ id: 5, name: "Resume" }] : []),
     ...(models.length ? [{ id: 3, name: "Switch Model" }] : []),
     ...(canChangeEffort ? [{ id: 4, name: "Change effort" }] : []),
@@ -795,8 +795,8 @@ class SessionScreen implements Screen {
         } else if (a.id === 6 && s?.controllable) {
           await this.app.hub.command(this.id, "/compact");
           this.app.toast("Compacting");
-        } else if (a.id === 8 && s?.controllable && agentOf(s) !== "codex") {
-          this.app.push(new ClearConversationScreen(this.app, this.id, s?.project || "this session"));
+        } else if (a.id === 8 && s?.controllable) {
+          this.app.push(new ClearConversationScreen(this.app, this.id, s?.project || "this session", agentOf(s)));
         } else if (a.id === 9 && s?.controllable) {
           this.app.push(new EndSessionScreen(this.app, this.id, s.project, agentOf(s)));
         } else if (a.id === 3 && s?.controllable && this.models.length) {
@@ -831,7 +831,7 @@ class SessionScreen implements Screen {
         if (levels.length) this.app.push(new EffortPicker(this.app, this.id, current?.effort || "", "", "Effort", levels));
         else this.app.toast("Effort choices are not available yet");
       } else if (command === "/clear") {
-        if (agentOf(current) === "claude") this.app.push(new ClearConversationScreen(this.app, this.id, current?.project || "this session"));
+        if (agentOf(current) === "claude") this.app.push(new ClearConversationScreen(this.app, this.id, current?.project || "this session", agentOf(current)));
         else this.app.toast("Use New session for a fresh Codex conversation");
       } else if (agentOf(current) === "codex" && /^\/(?:model|context|cost)\b/.test(command || "")) {
         this.app.toast(`${command!.split(" ")[0]} is Claude-only here`);
@@ -873,13 +873,13 @@ class EndSessionScreen implements Screen {
 }
 
 class ClearConversationScreen implements Screen {
-  constructor(private app: App, private id: string, private project: string) {}
+  constructor(private app: App, private id: string, private project: string, private agent: Agent) {}
 
   frame(): Frame {
     return {
       header: "Clear conversation?",
       body: wrap(
-        `This starts a fresh conversation in ${this.project}. The existing transcript stays in Claude's history.\n\nTap to clear · double-tap to cancel`,
+        `This starts a fresh conversation in ${this.project}. The existing transcript stays in ${AGENT_NAME[this.agent]}'s history.\n\nTap to clear · double-tap to cancel`,
         BODY_INNER_W,
       ),
     };
@@ -1019,7 +1019,7 @@ class ModelPicker extends Picker {
       run: async () => {
         await this.app.hub.command(this.id, `/model ${model.id}`);
         this.app.pop();
-        const suggested = this.agent === "codex" ? model.defaultEffort || "" : /opus/i.test(model.id) ? "xhigh" : "high";
+        const suggested = this.agent === "codex" ? "high" : /opus/i.test(model.id) ? "xhigh" : "high";
         const levels = this.agent === "codex" ? model.efforts || [] : [...EFFORT_LEVELS];
         if (levels.length) this.app.push(new EffortPicker(this.app, this.id, "", suggested, `${model.name} effort`, levels));
         else this.app.toast(`${model.name} from your next message`);

@@ -350,6 +350,10 @@ export class CodexBridge extends EventEmitter {
     this.joining = new Map(); // threadId -> {attempts, lastAt}
     this.itemCache = new Map(); // itemId -> started item, for approval details
     this.knownThreads = new Set(); // ids seen in recent(), to route a resume
+    // End and /clear remove a live row before Codex finishes unloading its thread.
+    // Keep auto-discovery from immediately subscribing to it again; History resume
+    // explicitly removes the id from this set.
+    this.suppressedThreads = new Set();
     this.stopped = false;
     this.retryMs = 1000;
     this.models = [];
@@ -500,6 +504,7 @@ export class CodexBridge extends EventEmitter {
     const { data = [] } = await this.call("thread/loaded/list", {});
     const loaded = new Set(data);
     for (const id of data) {
+      if (this.suppressedThreads.has(id)) continue;
       const s = this.session(id);
       if (!s?.codexJoined && !s?.releasedAt) await this.join(id);
     }
@@ -546,6 +551,7 @@ export class CodexBridge extends EventEmitter {
    * turn, and joining it fails until then, so failures retry quietly.
    */
   async join(threadId, { force = false } = {}) {
+    if (this.suppressedThreads.has(threadId)) return null;
     const j = this.joining.get(threadId) || { attempts: 0, lastAt: 0 };
     if (!force && (j.busy || Date.now() - j.lastAt < 4000 || j.attempts > 40)) return null;
     j.busy = true;
@@ -799,6 +805,9 @@ export class CodexBridge extends EventEmitter {
   /** Close the live glasses session while leaving the thread available in History. */
   async end(s) {
     await this.requireLive(s);
+    this.suppressedThreads.add(s.id);
+    this.joining.delete(s.id);
+    s.openTerminalAfterTurn = false;
     if (s.codexTurnId) await this.interrupt(s);
     if (s.tmuxName) {
       await tmuxCtl.tmux(null, ["kill-session", "-t", s.tmuxName]).catch((err) => this.log(`codex: close terminal: ${err.message}`));
@@ -810,6 +819,40 @@ export class CodexBridge extends EventEmitter {
     s.activity = "";
     s.lastActivity = Date.now();
     this.registry.remove(s.id);
+  }
+
+  /** Replace this live row with a genuinely new thread, leaving the old one in History. */
+  async clear(s) {
+    await this.requireLive(s);
+    if (!this.registry.allows(s.cwd)) throw Object.assign(new Error("that folder is outside this hub's allowed roots"), { status: 403 });
+
+    const params = { cwd: s.cwd };
+    if (s.model) params.model = s.model;
+    const r = await this.call("thread/start", params);
+    const replacement = this.adopt(r.thread, r.model, r.reasoningEffort);
+    if (!replacement) {
+      await this.call("thread/unsubscribe", { threadId: r.thread?.id }).catch(() => {});
+      throw Object.assign(new Error("that folder is outside this hub's allowed roots"), { status: 403 });
+    }
+
+    try {
+      if (s.effort) {
+        await this.call("thread/settings/update", { threadId: replacement.id, effort: s.effort });
+        replacement.effort = s.effort;
+      }
+    } catch (err) {
+      this.suppressedThreads.add(replacement.id);
+      await this.call("thread/unsubscribe", { threadId: replacement.id }).catch(() => {});
+      this.registry.remove(replacement.id);
+      throw err;
+    }
+
+    replacement.model = s.model || replacement.model;
+    replacement.context = null;
+    replacement.origin = s.origin;
+    await this.end(s);
+    this.registry.changed(replacement);
+    return replacement;
   }
 
   dialog(s) {
@@ -922,12 +965,20 @@ export class CodexBridge extends EventEmitter {
     if (!s) throw Object.assign(new Error("that folder is outside this hub's allowed roots"), { status: 403 });
     s.origin = "glasses";
     s.openTerminalAfterTurn = openTerminal;
+    const model = this.models.find((m) => m.id === s.model);
+    if (model?.efforts?.includes("high") && s.effort !== "high") {
+      await this.call("thread/settings/update", { threadId: s.id, effort: "high" });
+      s.effort = "high";
+      this.registry.changed(s);
+    }
     if (prompt) await this.prompt(s, prompt);
     return s;
   }
 
   async resumeSession({ id, openTerminal = false }) {
     if (!this.ready) throw Object.assign(new Error("Codex isn't connected right now"), { status: 503 });
+    this.suppressedThreads.delete(id);
+    this.joining.delete(id);
     const s = await this.join(id, { force: true });
     if (!s) throw Object.assign(new Error("couldn't open that Codex session"), { status: 502 });
     s.origin = "glasses";
