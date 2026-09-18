@@ -181,6 +181,8 @@ export class AmbientScreen implements Screen {
       widgets.push(clockWidget);
     }
     if (settings.hud.date.visible) widgets.push({ text: formatDate(at, settings.hud.date.format), position: settings.hud.date.position });
+    const battery = this.app.batteryText();
+    if (settings.battery.hud.visible && battery) widgets.push({ text: battery, position: settings.battery.hud.position });
     addBell(this.app, "clock", widgets, clockWidget);
     return { header: "", body: layoutWidgets(widgets), menu };
   }
@@ -215,7 +217,7 @@ export class AmbientScreen implements Screen {
     const settings = this.app.settings.current;
     const seconds = completionBannerSeconds(settings);
     const timedBannerVisible = completionMode(settings, "clock") === "banner" && !!seconds && !!this.app.completions.banner(Date.now(), seconds);
-    return settings.hud.clock.visible || settings.hud.date.visible || timedBannerVisible;
+    return settings.hud.clock.visible || settings.hud.date.visible || settings.battery.hud.visible || timedBannerVisible;
   }
 
   tickKey(now = Date.now()) {
@@ -243,6 +245,8 @@ export class PomodoroScreen implements Screen {
       position: settings.pomodoro.position,
     };
     const widgets: HudWidget[] = [timerWidget];
+    const battery = this.app.batteryText();
+    if (settings.battery.pomodoro.visible && battery) widgets.push({ text: battery, position: settings.battery.pomodoro.position });
     const mode = completionMode(settings, "pomodoro");
     const banner = mode === "banner" ? this.app.completions.banner(Date.now(), completionBannerSeconds(settings)) : null;
     if (banner) {
@@ -291,7 +295,7 @@ export class PomodoroScreen implements Screen {
   needsWake() {
     const settings = this.app.settings.current;
     const seconds = completionBannerSeconds(settings);
-    return this.app.pomodoro.snapshot().running || (completionMode(settings, "pomodoro") === "banner" && !!seconds && !!this.app.completions.banner(Date.now(), seconds));
+    return this.app.pomodoro.snapshot().running || settings.battery.pomodoro.visible || (completionMode(settings, "pomodoro") === "banner" && !!seconds && !!this.app.completions.banner(Date.now(), seconds));
   }
 
   tickKey(now = Date.now()) {

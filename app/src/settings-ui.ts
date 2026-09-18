@@ -99,6 +99,22 @@ function readForm(): TerminalHudSettings {
       position: value("pomodoro-position"),
       size: value("pomodoro-size"),
     },
+    battery: {
+      format: value("battery-format"),
+      showCharging: checked("battery-charging"),
+      hud: {
+        visible: checked("battery-hud-visible"),
+        position: value("battery-hud-position"),
+        size: value("battery-hud-size"),
+      },
+      pomodoro: {
+        visible: checked("battery-pomodoro-visible"),
+        position: value("battery-pomodoro-position"),
+        size: value("battery-pomodoro-size"),
+      },
+      sessions: { visible: checked("battery-sessions-visible") },
+      transcript: { visible: checked("battery-transcript-visible") },
+    },
     sessions: {
       showTime: checked("sessions-time"),
       showDate: checked("sessions-date"),
@@ -135,6 +151,16 @@ function assignForm(settings: TerminalHudSettings) {
   byId<HTMLSelectElement>("pomodoro-break-label").value = settings.pomodoro.breakLabel;
   byId<HTMLSelectElement>("pomodoro-size").value = settings.pomodoro.size;
   setPosition("pomodoro-position", settings.pomodoro.position);
+  byId<HTMLSelectElement>("battery-format").value = settings.battery.format;
+  byId<HTMLInputElement>("battery-charging").checked = settings.battery.showCharging;
+  byId<HTMLInputElement>("battery-hud-visible").checked = settings.battery.hud.visible;
+  byId<HTMLSelectElement>("battery-hud-size").value = settings.battery.hud.size;
+  setPosition("battery-hud-position", settings.battery.hud.position);
+  byId<HTMLInputElement>("battery-pomodoro-visible").checked = settings.battery.pomodoro.visible;
+  byId<HTMLSelectElement>("battery-pomodoro-size").value = settings.battery.pomodoro.size;
+  setPosition("battery-pomodoro-position", settings.battery.pomodoro.position);
+  byId<HTMLInputElement>("battery-sessions-visible").checked = settings.battery.sessions.visible;
+  byId<HTMLInputElement>("battery-transcript-visible").checked = settings.battery.transcript.visible;
   byId<HTMLInputElement>("sessions-time").checked = settings.sessions.showTime;
   byId<HTMLInputElement>("sessions-date").checked = settings.sessions.showDate;
   byId<HTMLInputElement>("sessions-history").checked = settings.sessions.showHistory;
@@ -217,6 +243,9 @@ function renderPreview(settings: TerminalHudSettings) {
       settings.pomodoro.size,
       "timer",
     );
+    if (settings.battery.pomodoro.visible) {
+      nodes.push(widget("battery", settings.battery.format === "label" ? "Bat 82%" : "82%", settings.battery.pomodoro.position, settings.battery.pomodoro.size));
+    }
   } else {
     if (settings.hud.clock.visible) {
       addAlertPreview(nodes, settings, settings.completion.clockMode, previewClock(now, settings), settings.hud.clock.position, settings.hud.clock.size, "clock");
@@ -227,6 +256,9 @@ function renderPreview(settings: TerminalHudSettings) {
       nodes.push(widget("completion", message, settings.completion.position, settings.completion.size));
     }
     if (settings.hud.date.visible) nodes.push(widget("date", previewDate(now, settings), settings.hud.date.position, settings.hud.date.size));
+    if (settings.battery.hud.visible) {
+      nodes.push(widget("battery", settings.battery.format === "label" ? "Bat 82%" : "82%", settings.battery.hud.position, settings.battery.hud.size));
+    }
   }
   screen.replaceChildren(...nodes);
   screen.style.setProperty("--preview-brightness", String(0.25 + settings.hud.brightness * 0.1875));

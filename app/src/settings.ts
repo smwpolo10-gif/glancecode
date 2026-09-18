@@ -19,6 +19,7 @@ export type CompletionMode = "off" | "bell" | "banner";
 export type BellPlacement = "before" | "after" | "opposite-corner";
 export type BannerDurationSeconds = 0 | 5 | 10 | 30 | 60;
 export type BreakLabel = "off" | "b" | "break";
+export type BatteryFormat = "percent" | "label";
 
 export interface WidgetPlacement {
   position: GridCell;
@@ -54,6 +55,14 @@ export interface TerminalHudSettings {
     longBreakMinutes: number;
     roundsBeforeLongBreak: number;
     breakLabel: BreakLabel;
+  };
+  battery: {
+    format: BatteryFormat;
+    showCharging: boolean;
+    hud: WidgetPlacement & { visible: boolean };
+    pomodoro: WidgetPlacement & { visible: boolean };
+    sessions: { visible: boolean };
+    transcript: { visible: boolean };
   };
   sessions: {
     showTime: boolean;
@@ -107,6 +116,14 @@ export const DEFAULT_SETTINGS: TerminalHudSettings = {
     position: "bottom-center",
     size: "medium",
   },
+  battery: {
+    format: "percent",
+    showCharging: true,
+    hud: { visible: false, position: "bottom-right", size: "small" },
+    pomodoro: { visible: false, position: "top-right", size: "small" },
+    sessions: { visible: false },
+    transcript: { visible: false },
+  },
   sessions: {
     showTime: true,
     showDate: false,
@@ -126,6 +143,7 @@ const COMPLETION_MODES = new Set<CompletionMode>(["off", "bell", "banner"]);
 const BELL_PLACEMENTS = new Set<BellPlacement>(["before", "after", "opposite-corner"]);
 const BANNER_DURATIONS = new Set<BannerDurationSeconds>([0, 5, 10, 30, 60]);
 const BREAK_LABELS = new Set<BreakLabel>(["off", "b", "break"]);
+const BATTERY_FORMATS = new Set<BatteryFormat>(["percent", "label"]);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -160,6 +178,11 @@ export function normalizeSettings(value: unknown): TerminalHudSettings {
   const date = record(hud.date);
   const completion = record(root.completion);
   const pomodoro = record(root.pomodoro);
+  const battery = record(root.battery);
+  const batteryHud = record(battery.hud);
+  const batteryPomodoro = record(battery.pomodoro);
+  const batterySessions = record(battery.sessions);
+  const batteryTranscript = record(battery.transcript);
   const sessions = record(root.sessions);
   const d = DEFAULT_SETTINGS;
 
@@ -204,6 +227,20 @@ export function normalizeSettings(value: unknown): TerminalHudSettings {
       roundsBeforeLongBreak: int(pomodoro.roundsBeforeLongBreak, d.pomodoro.roundsBeforeLongBreak, 1, 12),
       breakLabel: oneOf(pomodoro.breakLabel, BREAK_LABELS, d.pomodoro.breakLabel),
     },
+    battery: {
+      format: oneOf(battery.format, BATTERY_FORMATS, d.battery.format),
+      showCharging: bool(battery.showCharging, d.battery.showCharging),
+      hud: {
+        ...placement(batteryHud, d.battery.hud),
+        visible: bool(batteryHud.visible, d.battery.hud.visible),
+      },
+      pomodoro: {
+        ...placement(batteryPomodoro, d.battery.pomodoro),
+        visible: bool(batteryPomodoro.visible, d.battery.pomodoro.visible),
+      },
+      sessions: { visible: bool(batterySessions.visible, d.battery.sessions.visible) },
+      transcript: { visible: bool(batteryTranscript.visible, d.battery.transcript.visible) },
+    },
     sessions: {
       showTime: bool(sessions.showTime, d.sessions.showTime),
       showDate: bool(sessions.showDate, d.sessions.showDate),
@@ -226,6 +263,14 @@ function mergeSettings(base: TerminalHudSettings, patch: DeepPartial<TerminalHud
     },
     completion: { ...base.completion, ...record(root.completion) },
     pomodoro: { ...base.pomodoro, ...record(root.pomodoro) },
+    battery: {
+      ...base.battery,
+      ...record(root.battery),
+      hud: { ...base.battery.hud, ...record(record(root.battery).hud) },
+      pomodoro: { ...base.battery.pomodoro, ...record(record(root.battery).pomodoro) },
+      sessions: { ...base.battery.sessions, ...record(record(root.battery).sessions) },
+      transcript: { ...base.battery.transcript, ...record(record(root.battery).transcript) },
+    },
     sessions: { ...base.sessions, ...record(root.sessions) },
   };
 }

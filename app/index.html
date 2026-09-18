@@ -67,6 +67,41 @@
           </div>
         </details>
 
+        <details>
+          <summary>Glasses battery</summary>
+          <div class="settings-body settings-grid">
+            <label class="field">Display
+              <select id="battery-format"><option value="percent">82%</option><option value="label">Bat 82%</option></select>
+            </label>
+            <label class="toggle field">Show + while charging <input id="battery-charging" type="checkbox" /></label>
+
+            <h3 class="subheading">Ambient HUD</h3>
+            <label class="toggle field full">Show glasses battery <input id="battery-hud-visible" type="checkbox" /></label>
+            <label class="field">Size
+              <select id="battery-hud-size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
+            </label>
+            <div class="field full">Position
+              <input id="battery-hud-position" type="hidden" />
+              <div class="position-grid" data-position-grid="battery-hud-position" aria-label="Battery position on Ambient HUD"></div>
+            </div>
+
+            <h3 class="subheading">Pomodoro</h3>
+            <label class="toggle field full">Show glasses battery <input id="battery-pomodoro-visible" type="checkbox" /></label>
+            <label class="field">Size
+              <select id="battery-pomodoro-size"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select>
+            </label>
+            <div class="field full">Position
+              <input id="battery-pomodoro-position" type="hidden" />
+              <div class="position-grid" data-position-grid="battery-pomodoro-position" aria-label="Battery position on Pomodoro"></div>
+            </div>
+
+            <h3 class="subheading">Sessions</h3>
+            <label class="toggle field full">Show in Sessions header <input id="battery-sessions-visible" type="checkbox" /></label>
+            <label class="toggle field full">Show in open-session header <input id="battery-transcript-visible" type="checkbox" /></label>
+            <p class="hint full">Even reports one combined glasses percentage. Session views place it in the top header; HUD and Pomodoro use their own grid positions. Size is saved and previewed; the current native glasses text uses one size.</p>
+          </div>
+        </details>
+
         <details open>
           <summary>Completion alerts</summary>
           <div class="settings-body settings-grid">

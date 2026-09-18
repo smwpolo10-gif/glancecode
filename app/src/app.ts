@@ -1,5 +1,5 @@
 // Screens and controller for the glasses UI.
-import { AudioInputSource, ImuReportPace, type EvenAppBridge } from "@evenrealities/even_hub_sdk";
+import { AudioInputSource, ImuReportPace, type DeviceStatus, type EvenAppBridge } from "@evenrealities/even_hub_sdk";
 import { every, later, type Cancel } from "./timers.ts";
 import { BODY_INNER_W, BODY_LINES, HEADER_INNER_W, Display, type Frame, type MenuItem } from "./display.ts";
 import { GLYPH, ago, itemsToLines, shortModel, stateLabel } from "./format.ts";
@@ -12,6 +12,7 @@ import type { SettingsStore } from "./settings.ts";
 import { padTo, spread, truncate, width, wrap } from "./text.ts";
 import type { Agent, ModelChoice, RecentProject, SessionSummary } from "./types.ts";
 import { spokenSlashCommand } from "./voice-command.ts";
+import { formatBattery, normalizeBatteryLevel } from "./battery.ts";
 
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
@@ -53,6 +54,8 @@ export class App {
   private tickKey = "";
   readonly completions = new CompletionInbox();
   readonly pomodoro: PomodoroTimer;
+  private batteryLevel: number | null = null;
+  private batteryCharging = false;
 
   constructor(public bridge: EvenAppBridge, public display: Display, public hub: Hub, public settings: SettingsStore) {
     const p = settings.current.pomodoro;
@@ -77,6 +80,18 @@ export class App {
     });
     this.top.enter?.();
     this.render(true);
+    const receiveBattery = (status: Pick<DeviceStatus, "batteryLevel" | "isCharging">) => {
+      const level = normalizeBatteryLevel(status.batteryLevel);
+      const charging = !!status.isCharging;
+      if (level === this.batteryLevel && charging === this.batteryCharging) return;
+      this.batteryLevel = level;
+      this.batteryCharging = charging;
+      this.render();
+    };
+    bridge.onDeviceStatusChanged(receiveBattery);
+    void bridge.getDeviceInfo().then((device) => {
+      if (device) receiveBattery(device.status);
+    }).catch(() => {});
     this.tickTimer = every(() => {
       if (this.voice.phase === "recording") this.render();
       const top = this.top;
@@ -98,6 +113,11 @@ export class App {
 
   get top(): Screen {
     return this.stack[this.stack.length - 1];
+  }
+
+  batteryText(): string | null {
+    const battery = this.settings.current.battery;
+    return formatBattery(this.batteryLevel, this.batteryCharging, battery.format, battery.showCharging);
   }
 
   push(s: Screen) {
@@ -531,7 +551,11 @@ class HomeScreen implements Screen {
     return {
       header: spread(
         this.app.hub.cfg.url === "demo" ? "Sessions · demo" : "Sessions",
-        [sessions.length ? counts(sessions) : "no sessions", sessionStamp(this.app.settings.current)].filter(Boolean).join(" · "),
+        [
+          sessions.length ? counts(sessions) : "no sessions",
+          this.app.settings.current.battery.sessions.visible ? this.app.batteryText() : "",
+          sessionStamp(this.app.settings.current),
+        ].filter(Boolean).join(" · "),
         HEADER_INNER_W,
       ),
       body: visible,
@@ -716,6 +740,7 @@ class SessionScreen implements Screen {
     const model = shortModel(s.model);
     rightParts.push(s.controllable ? `${model}${s.effort ? ` · ${s.effort}` : ""}` : "view only");
     const stamp = sessionStamp(this.app.settings.current);
+    if (this.app.settings.current.battery.transcript.visible) rightParts.push(this.app.batteryText() || "");
     if (stamp) rightParts.push(stamp);
     return { header: spread(left, rightParts.filter(Boolean).join("  "), HEADER_INNER_W), body, menu };
   }
